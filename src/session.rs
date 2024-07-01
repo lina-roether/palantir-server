@@ -6,7 +6,7 @@ use crate::{media::Media, user::User};
 
 struct Session {
     password: String,
-    users: Vec<User>,
+    users: HashMap<Uuid, User>,
     media: Option<Media>,
 }
 
@@ -14,7 +14,7 @@ impl Session {
     fn new(password: String) -> Self {
         Self {
             password,
-            users: Vec::new(),
+            users: HashMap::new(),
             media: None,
         }
     }
