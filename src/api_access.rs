@@ -1,18 +1,17 @@
-use std::{collections::HashMap, fs, path::PathBuf, str::FromStr};
+use std::sync::Arc;
 
-use log::error;
 use serde::Deserialize;
 
-const DEFAULT_CONFIG_PATH: &str = "./access.toml";
+use crate::config::Config;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct ApiPermissions {
     pub join: bool,
     pub host: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct ApiKey {
     key: String,
 
@@ -46,7 +45,7 @@ impl ApiPermissions {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 struct ApiAccessPolicy {
     disable_access_control: bool,
@@ -64,49 +63,24 @@ impl Default for ApiAccessPolicy {
     }
 }
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Default, Clone)]
 #[serde(default)]
-struct ApiAccessConfig {
+pub struct ApiAccessConfig {
     policy: ApiAccessPolicy,
     keys: Vec<ApiKey>,
 }
 
 pub struct ApiAccessManager {
-    config_path: PathBuf,
+    config: Arc<Config>,
 }
 
 impl ApiAccessManager {
-    pub fn new(config_path: Option<PathBuf>) -> Self {
-        Self {
-            config_path: config_path.unwrap_or_else(|| {
-                PathBuf::from_str(DEFAULT_CONFIG_PATH)
-                    .expect("Failed to construct default config path!")
-            }),
-        }
-    }
-
-    fn get_config(&self) -> ApiAccessConfig {
-        let cfg_file = match fs::read_to_string(&self.config_path) {
-            Ok(cfg_file) => cfg_file,
-            Err(err) => {
-                error!("Failed to open {}: {}", self.config_path.display(), err);
-                return ApiAccessConfig::default();
-            }
-        };
-
-        let config: ApiAccessConfig = match toml::from_str(&cfg_file) {
-            Ok(config) => config,
-            Err(err) => {
-                error!("Failed to parse {}: {}", self.config_path.display(), err);
-                return ApiAccessConfig::default();
-            }
-        };
-
-        config
+    pub fn new(config: Arc<Config>) -> Self {
+        Self { config }
     }
 
     pub fn acquire_permissions(&self, key: Option<&str>, permissions: ApiPermissions) -> bool {
-        let config = self.get_config();
+        let config = &self.config.api_access;
 
         if config.policy.disable_access_control {
             return true;

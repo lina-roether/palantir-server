@@ -1,19 +1,23 @@
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::Arc;
 
 use api_access::{ApiAccessManager, ApiPermissions};
-use messages::{Message, MessageBody, SessionStateMsgBody, SessionUser, SessionUserRole};
-use uuid::Uuid;
+use config::read_config;
 
 mod api_access;
+mod config;
 mod media;
 mod messages;
 mod playback;
+mod server;
 mod session;
 mod user;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     pretty_env_logger::init();
 
-    let access = ApiAccessManager::new(None);
+    let mut config = read_config(None);
+
+    let access = ApiAccessManager::new(Arc::clone(&config));
     dbg!(access.acquire_permissions(Some("test"), ApiPermissions::join()));
 }
