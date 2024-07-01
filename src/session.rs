@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::RwLock};
 
 use uuid::Uuid;
 
@@ -44,13 +44,14 @@ impl Session {
 }
 
 struct SessionManager {
-    sessions: HashMap<Uuid, Session>,
+    sessions: HashMap<Uuid, RwLock<Session>>,
 }
 
 impl SessionManager {
     fn start_session(&mut self, password: String) -> Uuid {
         let id = Uuid::new_v4();
-        self.sessions.insert(id, Session::new(password));
+        self.sessions
+            .insert(id, RwLock::new(Session::new(password)));
         id
     }
 

@@ -1,8 +1,8 @@
-use std::sync::Arc;
-
 use config::read_config;
+use futures_util::SinkExt;
 use log::error;
-use server::start_server;
+use messages::{Message, MessageBody};
+use server::Server;
 
 mod api_access;
 mod config;
@@ -17,7 +17,23 @@ async fn main() {
 
     let config = read_config(None);
 
-    if let Err(err) = start_server(Arc::clone(&config)).await {
-        error!("Failed to start server: {err:?}");
-    }
+    let server = match Server::bind(config).await {
+        Ok(server) => server,
+        Err(err) => {
+            error!("Failed to start server: {err:?}");
+            return;
+        }
+    };
+
+    server
+        .listen(|_stream, mut sink| async move {
+            sink.send(Message {
+                version: 1,
+                timestamp: 69,
+                body: MessageBody::TimingPing,
+            })
+            .await?;
+            Ok(())
+        })
+        .await;
 }
