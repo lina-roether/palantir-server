@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use api_access::{ApiAccessManager, ApiPermissions};
 use config::read_config;
 use log::error;
 use server::start_server;
@@ -21,6 +20,6 @@ async fn main() {
     let config = read_config(None);
 
     if let Err(err) = start_server(Arc::clone(&config)).await {
-        error!("Failed to start server: {err}");
+        error!("Failed to start server: {err:?}");
     }
 }
