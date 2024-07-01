@@ -6,9 +6,7 @@ use server::start_server;
 
 mod api_access;
 mod config;
-mod media;
 mod messages;
-mod playback;
 mod server;
 mod session;
 mod user;

@@ -2,7 +2,30 @@ use std::collections::HashMap;
 
 use uuid::Uuid;
 
-use crate::{media::Media, user::User};
+pub struct PlaybackState {
+    playing: bool,
+    time: u64,
+    last_update: u64,
+}
+
+pub struct Media {
+    page_href: String,
+    frame_href: String,
+    element_query: String,
+    state: PlaybackState,
+}
+
+pub enum UserRole {
+    Host,
+    Guest,
+}
+
+pub struct User {
+    name: String,
+    key: Box<[u8]>,
+    role: UserRole,
+    time_offset: i32,
+}
 
 struct Session {
     password: String,
