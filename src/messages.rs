@@ -4,9 +4,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct UserLoginMsgBody {
-    pub api_key: Option<Vec<u8>>,
-    pub name: String,
+pub struct AuthLoginMsgBody {
+    pub api_key: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -16,12 +15,14 @@ pub struct TimingPongMsgBody {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SessionStartMsgBody {
+    pub name: String,
     pub password: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SessionJoinMsgBody {
     pub id: Uuid,
+    pub name: String,
     pub password: String,
 }
 
@@ -65,11 +66,11 @@ pub struct PlaybackSyncMsgBody {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "m")]
 pub enum MessageBody {
-    #[serde(rename = "user::login")]
-    UserLogin(UserLoginMsgBody),
+    #[serde(rename = "auth::login")]
+    AuthLogin(AuthLoginMsgBody),
 
-    #[serde(rename = "user::login_ack")]
-    UserLoginAck,
+    #[serde(rename = "auth::ack")]
+    AuthAck,
 
     #[serde(rename = "timing::ping")]
     TimingPing,

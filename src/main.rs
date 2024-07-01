@@ -1,8 +1,10 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use api_access::{ApiAccessManager, ApiPermissions};
 use messages::{Message, MessageBody, SessionStateMsgBody, SessionUser, SessionUserRole};
 use uuid::Uuid;
 
+mod api_access;
 mod media;
 mod messages;
 mod playback;
@@ -10,33 +12,8 @@ mod session;
 mod user;
 
 fn main() {
-    let message = Message {
-        version: 1,
-        timestamp: SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("System time before unix epoch!")
-            .as_millis()
-            .try_into()
-            .expect("Timestamp overflow!"),
-        body: MessageBody::SessionState(SessionStateMsgBody {
-            id: Uuid::new_v4(),
-            password: "cooles passwort".to_string(),
-            users: vec![
-                SessionUser {
-                    name: "niko".to_string(),
-                    role: SessionUserRole::Host,
-                },
-                SessionUser {
-                    name: "bcnyyy".to_string(),
-                    role: SessionUserRole::Guest,
-                },
-            ],
-        }),
-    };
+    pretty_env_logger::init();
 
-    println!(
-        "{}",
-        // serde_json::to_string(&message).unwrap()
-        String::from_utf8_lossy(&rmp_serde::to_vec(&message).unwrap())
-    )
+    let access = ApiAccessManager::new(None);
+    dbg!(access.acquire_permissions(Some("test"), ApiPermissions::join()));
 }
