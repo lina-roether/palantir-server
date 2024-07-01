@@ -1,6 +1,6 @@
 pub enum UserRole {
     Host,
-    Spectator,
+    Guest,
 }
 
 pub struct User {

@@ -1,13 +1,17 @@
 use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
-use tokio_tungstenite::tungstenite;
 use uuid::Uuid;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UserLoginMsgBody {
     pub api_key: Option<Vec<u8>>,
     pub name: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TimingPongMsgBody {
+    pub timestamp: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -19,6 +23,28 @@ pub struct SessionStartMsgBody {
 pub struct SessionJoinMsgBody {
     pub id: Uuid,
     pub password: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub enum SessionUserRole {
+    #[serde(rename = "host")]
+    Host,
+
+    #[serde(rename = "guest")]
+    Guest,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SessionUser {
+    pub name: String,
+    pub role: SessionUserRole,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SessionStateMsgBody {
+    pub id: Uuid,
+    pub password: String,
+    pub users: Vec<SessionUser>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -37,17 +63,19 @@ pub struct PlaybackSyncMsgBody {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct AdminGenApiKeyMsgBody {
-    pub join: bool,
-    pub host: bool,
-    pub admin: bool,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(tag = "kind")]
+#[serde(tag = "m")]
 pub enum MessageBody {
     #[serde(rename = "user::login")]
     UserLogin(UserLoginMsgBody),
+
+    #[serde(rename = "user::login_ack")]
+    UserLoginAck,
+
+    #[serde(rename = "timing::ping")]
+    TimingPing,
+
+    #[serde(rename = "timing::pong")]
+    TimingPong(TimingPongMsgBody),
 
     #[serde(rename = "session::start")]
     SessionStart(SessionStartMsgBody),
@@ -61,28 +89,27 @@ pub enum MessageBody {
     #[serde(rename = "session::leave")]
     SessionLeave,
 
+    #[serde(rename = "session::state")]
+    SessionState(SessionStateMsgBody),
+
+    #[serde(rename = "session::keepalive")]
+    SessionKeepalive,
+
     #[serde(rename = "media::select")]
     MediaSelect(MediaSelectMsgBody),
 
     #[serde(rename = "playback::sync")]
     PlaybackSync(PlaybackSyncMsgBody),
-
-    #[serde(rename = "admin::gen_api_key")]
-    AdminGenApiKey(AdminGenApiKeyMsgBody),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Message {
+    #[serde(rename = "v")]
     pub version: u16,
+
+    #[serde(rename = "t")]
+    pub timestamp: u64,
 
     #[serde(flatten)]
     pub body: MessageBody,
-}
-
-impl TryFrom<&Message> for tungstenite::Message {
-    type Error = rmp_serde::encode::Error;
-
-    fn try_from(value: &Message) -> Result<Self, Self::Error> {
-        Ok(tungstenite::Message::Binary(rmp_serde::to_vec(&value)?))
-    }
 }
