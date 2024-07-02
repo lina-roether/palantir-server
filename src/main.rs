@@ -1,15 +1,16 @@
 use config::read_config;
 use futures_util::SinkExt;
+use listener::Listener;
 use log::error;
 use messages::{Message, MessageBody};
-use server::Server;
 
 mod api_access;
 mod config;
+mod listener;
 mod messages;
-mod server;
 mod session;
 mod user;
+mod utils;
 
 #[tokio::main]
 async fn main() {
@@ -17,7 +18,7 @@ async fn main() {
 
     let config = read_config(None);
 
-    let server = match Server::bind(config).await {
+    let server = match Listener::bind(config).await {
         Ok(server) => server,
         Err(err) => {
             error!("Failed to start server: {err:?}");
@@ -28,9 +29,8 @@ async fn main() {
     server
         .listen(|_stream, mut sink| async move {
             sink.send(Message {
-                version: 1,
                 timestamp: 69,
-                body: MessageBody::TimingPing,
+                body: MessageBody::ConnectionPingV1,
             })
             .await?;
             Ok(())

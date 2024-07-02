@@ -1,6 +1,16 @@
-use std::{collections::HashMap, sync::RwLock};
+use std::{collections::HashMap, time::Duration};
 
+use anyhow::Result;
+use futures_util::{SinkExt, StreamExt};
+use parking_lot::RwLock;
+use tokio::time::timeout;
 use uuid::Uuid;
+
+use crate::{
+    listener::{MessageSink, MessageStream},
+    messages::{Message, MessageBody},
+    utils::timestamp,
+};
 
 pub struct PlaybackState {
     playing: bool,
@@ -22,9 +32,10 @@ pub enum UserRole {
 
 pub struct User {
     name: String,
-    key: Box<[u8]>,
     role: UserRole,
     time_offset: i32,
+    message_stream: MessageStream,
+    message_sink: MessageSink,
 }
 
 struct Session {
@@ -33,6 +44,8 @@ struct Session {
     media: Option<Media>,
 }
 
+const RESPONSE_TIMEOUT: Duration = Duration::from_secs(2);
+
 impl Session {
     fn new(password: String) -> Self {
         Self {
@@ -40,6 +53,37 @@ impl Session {
             users: HashMap::new(),
             media: None,
         }
+    }
+
+    async fn add_user(
+        &mut self,
+        name: String,
+        role: UserRole,
+        message_stream: MessageStream,
+        message_sink: MessageSink,
+    ) -> Result<()> {
+        let mut user = User {
+            name,
+            role,
+            time_offset: 0,
+            message_stream,
+            message_sink,
+        };
+        todo!()
+    }
+
+    async fn get_time_offset(
+        message_stream: &mut MessageStream,
+        message_sink: &mut MessageSink,
+    ) -> Result<i32> {
+        message_sink
+            .send(Message {
+                timestamp: timestamp(),
+                body: MessageBody::ConnectionPingV1,
+            })
+            .await?;
+
+        todo!()
     }
 }
 
@@ -53,6 +97,10 @@ impl SessionManager {
         self.sessions
             .insert(id, RwLock::new(Session::new(password)));
         id
+    }
+
+    fn get_session(&self, id: Uuid) -> Option<&RwLock<Session>> {
+        self.sessions.get(&id)
     }
 
     fn stop_session(&mut self, id: Uuid) {

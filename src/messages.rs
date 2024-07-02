@@ -4,30 +4,51 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct AuthLoginMsgBody {
+pub struct ConnectionLoginMsgBodyV1 {
     pub api_key: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct TimingPongMsgBody {
+pub struct ConnectionPongMsgBodyV1 {
     pub timestamp: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct SessionStartMsgBody {
+pub enum ConnectionClosedReasonV1 {
+    #[serde(rename = "client_error")]
+    ClientError,
+
+    #[serde(rename = "server_error")]
+    ServerError,
+
+    #[serde(rename = "session_closed")]
+    SessionClosed,
+
+    #[serde(rename = "timeout")]
+    Timeout,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ConnectionClosedMsgBodyV1 {
+    pub reason: ConnectionClosedReasonV1,
+    pub message: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SessionStartMsgBodyV1 {
     pub name: String,
     pub password: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct SessionJoinMsgBody {
+pub struct SessionJoinMsgBodyV1 {
     pub id: Uuid,
     pub name: String,
     pub password: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub enum SessionUserRole {
+pub enum SessionUserRoleV1 {
     #[serde(rename = "host")]
     Host,
 
@@ -36,27 +57,39 @@ pub enum SessionUserRole {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct SessionUser {
+pub struct SessionUserV1 {
     pub name: String,
-    pub role: SessionUserRole,
+    pub role: SessionUserRoleV1,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct SessionStateMsgBody {
+pub struct SessionStateMsgBodyV1 {
     pub id: Uuid,
     pub password: String,
-    pub users: Vec<SessionUser>,
+    pub users: Vec<SessionUserV1>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct MediaSelectMsgBody {
+pub enum SessionTerminateReasonV1 {
+    #[serde(rename = "closed_by_host")]
+    ClosedByHost,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SessionTerminatedMsgBodyV1 {
+    pub reason: SessionTerminateReasonV1,
+    pub message: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MediaSelectMsgBodyV1 {
     pub page_href: String,
     pub frame_href: String,
     pub element_query: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct PlaybackSyncMsgBody {
+pub struct PlaybackSyncMsgBodyV1 {
     pub active_sync: bool,
     pub playing: bool,
     pub time: u64,
@@ -66,48 +99,51 @@ pub struct PlaybackSyncMsgBody {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "m")]
 pub enum MessageBody {
-    #[serde(rename = "auth::login")]
-    AuthLogin(AuthLoginMsgBody),
+    #[serde(rename = "connection::login/v1")]
+    ConnectionLoginV1(ConnectionLoginMsgBodyV1),
 
-    #[serde(rename = "auth::ack")]
-    AuthAck,
+    #[serde(rename = "connection::login_ack/v1")]
+    ConnectionLoginAckV1,
 
-    #[serde(rename = "timing::ping")]
-    TimingPing,
+    #[serde(rename = "connection::ping/v1")]
+    ConnectionPingV1,
 
-    #[serde(rename = "timing::pong")]
-    TimingPong(TimingPongMsgBody),
+    #[serde(rename = "connection::pong/v1")]
+    ConnectionPongV1(ConnectionPongMsgBodyV1),
 
-    #[serde(rename = "session::start")]
-    SessionStart(SessionStartMsgBody),
+    #[serde(rename = "connection::closed/v1")]
+    ConnectionClosedV1(ConnectionClosedMsgBodyV1),
 
-    #[serde(rename = "session::stop")]
-    SessionStop,
+    #[serde(rename = "session::start/v1")]
+    SessionStartV1(SessionStartMsgBodyV1),
 
-    #[serde(rename = "session::join")]
-    SessionJoin(SessionJoinMsgBody),
+    #[serde(rename = "session::stop/v1")]
+    SessionStopV1,
 
-    #[serde(rename = "session::leave")]
-    SessionLeave,
+    #[serde(rename = "session::join/v1")]
+    SessionJoinV1(SessionJoinMsgBodyV1),
 
-    #[serde(rename = "session::state")]
-    SessionState(SessionStateMsgBody),
+    #[serde(rename = "session::leave/v1")]
+    SessionLeaveV1,
 
-    #[serde(rename = "session::keepalive")]
-    SessionKeepalive,
+    #[serde(rename = "session::terminated/v1")]
+    SessionTerminatedV1(SessionTerminatedMsgBodyV1),
 
-    #[serde(rename = "media::select")]
-    MediaSelect(MediaSelectMsgBody),
+    #[serde(rename = "session::state/v1")]
+    SessionStateV1(SessionStateMsgBodyV1),
 
-    #[serde(rename = "playback::sync")]
-    PlaybackSync(PlaybackSyncMsgBody),
+    #[serde(rename = "session::keepalive/v1")]
+    SessionKeepaliveV1,
+
+    #[serde(rename = "media::select/v1")]
+    MediaSelectV1(MediaSelectMsgBodyV1),
+
+    #[serde(rename = "playback::sync/v1")]
+    PlaybackSyncV1(PlaybackSyncMsgBodyV1),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Message {
-    #[serde(rename = "v")]
-    pub version: u16,
-
     #[serde(rename = "t")]
     pub timestamp: u64,
 

@@ -29,12 +29,12 @@ impl Default for ServerConfig {
     }
 }
 
-pub struct Server {
+pub struct Listener {
     config: ServerConfig,
     listener: TcpListener,
 }
 
-impl Server {
+impl Listener {
     pub async fn bind(config: Arc<Config>) -> Result<Self> {
         let listener = TcpListener::bind(&config.server.listen_on)
             .await
