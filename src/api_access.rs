@@ -19,17 +19,20 @@ struct ApiKey {
     permissions: ApiPermissions,
 }
 
-#[allow(clippy::derivable_impls)]
 impl Default for ApiPermissions {
     fn default() -> Self {
+        Self::none()
+    }
+}
+
+impl ApiPermissions {
+    pub const fn none() -> Self {
         Self {
             join: false,
             host: false,
         }
     }
-}
 
-impl ApiPermissions {
     pub const fn join() -> Self {
         Self {
             join: true,
@@ -40,6 +43,13 @@ impl ApiPermissions {
     pub const fn host() -> Self {
         Self {
             join: false,
+            host: true,
+        }
+    }
+
+    pub const fn all() -> Self {
+        Self {
+            join: true,
             host: true,
         }
     }
@@ -79,28 +89,24 @@ impl ApiAccessManager {
         Self { config }
     }
 
-    pub fn acquire_permissions(&self, key: Option<&str>, permissions: ApiPermissions) -> bool {
+    pub fn get_permissions(&self, key: Option<&str>) -> ApiPermissions {
         let config = &self.config.api_access;
 
         if config.policy.disable_access_control {
-            return true;
+            return ApiPermissions::all();
         }
 
         let Some(key) = key else {
-            return false;
+            return ApiPermissions::none();
         };
 
-        let mut join_check = !permissions.join;
-        let mut host_check = !permissions.host;
+        let Some(key_config) = config.keys.iter().find(|k| k.key == key) else {
+            return ApiPermissions::none();
+        };
 
-        join_check |= !config.policy.restrict_join;
-        host_check |= !config.policy.restrict_host;
-
-        if let Some(key_config) = config.keys.iter().find(|k| k.key == key) {
-            join_check |= key_config.permissions.join;
-            host_check |= key_config.permissions.host;
+        ApiPermissions {
+            join: !config.policy.restrict_join || key_config.permissions.join,
+            host: !config.policy.restrict_host || key_config.permissions.host,
         }
-
-        join_check && host_check
     }
 }

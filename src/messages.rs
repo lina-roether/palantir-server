@@ -3,6 +3,8 @@ use std::time::SystemTime;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::utils::timestamp;
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ConnectionLoginMsgBodyV1 {
     pub api_key: Option<String>,
@@ -15,8 +17,8 @@ pub struct ConnectionPongMsgBodyV1 {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ConnectionClosedReasonV1 {
-    #[serde(rename = "client_error")]
-    ClientError,
+    #[serde(rename = "auth_failed")]
+    AuthFailed,
 
     #[serde(rename = "server_error")]
     ServerError,
@@ -31,6 +33,11 @@ pub enum ConnectionClosedReasonV1 {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ConnectionClosedMsgBodyV1 {
     pub reason: ConnectionClosedReasonV1,
+    pub message: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ConnectionClientErrorMsgBodyV1 {
     pub message: String,
 }
 
@@ -111,6 +118,9 @@ pub enum MessageBody {
     #[serde(rename = "connection::pong/v1")]
     ConnectionPongV1(ConnectionPongMsgBodyV1),
 
+    #[serde(rename = "connection::client_error/v1")]
+    ConnectionClientErrorV1(ConnectionClientErrorMsgBodyV1),
+
     #[serde(rename = "connection::closed/v1")]
     ConnectionClosedV1(ConnectionClosedMsgBodyV1),
 
@@ -149,4 +159,13 @@ pub struct Message {
 
     #[serde(flatten)]
     pub body: MessageBody,
+}
+
+impl Message {
+    pub fn new(body: MessageBody) -> Self {
+        Self {
+            timestamp: timestamp(),
+            body,
+        }
+    }
 }

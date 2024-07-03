@@ -1,11 +1,14 @@
+use std::sync::Arc;
+
+use api_access::ApiAccessManager;
 use config::read_config;
-use futures_util::SinkExt;
+use connection::Connection;
 use listener::Listener;
 use log::error;
-use messages::{Message, MessageBody};
 
 mod api_access;
 mod config;
+mod connection;
 mod listener;
 mod messages;
 mod session;
@@ -18,6 +21,8 @@ async fn main() {
 
     let config = read_config(None);
 
+    let access = Arc::new(ApiAccessManager::new(Arc::clone(&config)));
+
     let server = match Listener::bind(config).await {
         Ok(server) => server,
         Err(err) => {
@@ -27,13 +32,13 @@ async fn main() {
     };
 
     server
-        .listen(|_stream, mut sink| async move {
-            sink.send(Message {
-                timestamp: 69,
-                body: MessageBody::ConnectionPingV1,
-            })
-            .await?;
-            Ok(())
+        .listen(move |channel| {
+            let access = Arc::clone(&access);
+            async move {
+                let mut conn = Connection::new(channel).await;
+                conn.init(&access).await;
+                Ok(())
+            }
         })
         .await;
 }
