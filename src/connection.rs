@@ -190,6 +190,14 @@ impl Connection {
                 return None;
             };
             match msg_res {
+                Ok(Message {
+                    body: MessageBody::ConnectionPingV1,
+                    ..
+                }) => {
+                    if let Err(err) = self.send(Message::new(MessageBody::ConnectionPongV1)).await {
+                        error!("Failed to send pong: {err:?}");
+                    }
+                }
                 Ok(msg) => return Some(msg),
                 Err(err) => {
                     debug!("Received malformed message from client: {err:?}");
