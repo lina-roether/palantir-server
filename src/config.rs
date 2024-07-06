@@ -3,7 +3,7 @@ use std::{fs, path::PathBuf, str::FromStr, sync::Arc};
 use log::error;
 use serde::Deserialize;
 
-use crate::{api_access::ApiAccessConfig, listener::ServerConfig};
+use crate::{api_access::ApiAccessConfig, connection::ServerConfig};
 
 const DEFAULT_CONFIG_PATH: &str = "config.toml";
 

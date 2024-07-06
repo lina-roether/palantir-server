@@ -1,6 +1,14 @@
-use std::time::SystemTime;
+use std::{
+    error::Error,
+    pin::Pin,
+    task::{Context, Poll},
+    time::SystemTime,
+};
 
+use anyhow::{anyhow, Context as _};
+use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use serde::{Deserialize, Serialize};
+use tokio_tungstenite::tungstenite;
 use uuid::Uuid;
 
 use crate::utils::timestamp;
@@ -8,11 +16,6 @@ use crate::utils::timestamp;
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ConnectionLoginMsgBodyV1 {
     pub api_key: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ConnectionPongMsgBodyV1 {
-    pub timestamp: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -28,6 +31,9 @@ pub enum ConnectionClosedReasonV1 {
 
     #[serde(rename = "timeout")]
     Timeout,
+
+    #[serde(rename = "unknown")]
+    Unknown,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -106,6 +112,9 @@ pub struct PlaybackSyncMsgBodyV1 {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "m")]
 pub enum MessageBody {
+    #[serde(rename = "connection::hello/v1")]
+    ConnectionHelloV1,
+
     #[serde(rename = "connection::login/v1")]
     ConnectionLoginV1(ConnectionLoginMsgBodyV1),
 
@@ -116,7 +125,7 @@ pub enum MessageBody {
     ConnectionPingV1,
 
     #[serde(rename = "connection::pong/v1")]
-    ConnectionPongV1(ConnectionPongMsgBodyV1),
+    ConnectionPongV1,
 
     #[serde(rename = "connection::client_error/v1")]
     ConnectionClientErrorV1(ConnectionClientErrorMsgBodyV1),
@@ -167,5 +176,78 @@ impl Message {
             timestamp: timestamp(),
             body,
         }
+    }
+}
+
+pub struct MessageChannel<S> {
+    ws: S,
+}
+
+impl<S> MessageChannel<S> {
+    pub fn new(ws: S) -> Self {
+        Self { ws }
+    }
+}
+
+impl<S> Sink<Message> for MessageChannel<S>
+where
+    S: Sink<tungstenite::Message> + Unpin,
+    S::Error: Error + Send + Sync + 'static,
+{
+    type Error = anyhow::Error;
+
+    fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.ws.poll_ready_unpin(cx).map_err(anyhow::Error::from)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.ws.poll_flush_unpin(cx).map_err(anyhow::Error::from)
+    }
+
+    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.ws.poll_close_unpin(cx).map_err(anyhow::Error::from)
+    }
+
+    fn start_send(mut self: Pin<&mut Self>, item: Message) -> Result<(), Self::Error> {
+        let data = rmp_serde::to_vec(&item).context("Failed to serialize message")?;
+        self.ws
+            .start_send_unpin(tungstenite::Message::Binary(data))?;
+        Ok(())
+    }
+}
+
+impl<S> Stream for MessageChannel<S>
+where
+    S: Sink<tungstenite::Message>
+        + Stream<Item = tungstenite::Result<tungstenite::Message>>
+        + Unpin,
+    S::Error: Error + Send + Sync,
+{
+    type Item = anyhow::Result<Message>;
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.ws.size_hint()
+    }
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.ws.poll_next_unpin(cx).map(|msg| {
+            let Some(msg) = msg else {
+                return None;
+            };
+            let msg = match msg {
+                Ok(msg) => msg,
+                Err(err) => return Some(Err(err.into())),
+            };
+            let tungstenite::Message::Binary(data) = msg else {
+                return Some(Err(anyhow!("Only binary messages are accepted.")));
+            };
+            let deserialized = match rmp_serde::from_slice(&data) {
+                Ok(d) => d,
+                Err(err) => {
+                    return Some(Err(err.into()));
+                }
+            };
+            Some(Ok(deserialized))
+        })
     }
 }

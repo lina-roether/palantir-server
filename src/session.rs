@@ -1,13 +1,7 @@
 use std::{collections::HashMap, time::Duration};
 
-use anyhow::Result;
 use parking_lot::RwLock;
 use uuid::Uuid;
-
-use crate::{
-    messages::{Message, MessageBody},
-    utils::timestamp,
-};
 
 pub struct PlaybackState {
     playing: bool,

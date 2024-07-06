@@ -7,7 +7,7 @@ use crate::config::Config;
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct ApiPermissions {
-    pub join: bool,
+    pub connect: bool,
     pub host: bool,
 }
 
@@ -15,7 +15,7 @@ pub struct ApiPermissions {
 struct ApiKey {
     key: String,
 
-    #[serde(default, flatten)]
+    #[serde(default = "ApiPermissions::connect", flatten)]
     permissions: ApiPermissions,
 }
 
@@ -28,28 +28,28 @@ impl Default for ApiPermissions {
 impl ApiPermissions {
     pub const fn none() -> Self {
         Self {
-            join: false,
+            connect: false,
             host: false,
         }
     }
 
-    pub const fn join() -> Self {
+    pub const fn connect() -> Self {
         Self {
-            join: true,
+            connect: true,
             host: false,
         }
     }
 
     pub const fn host() -> Self {
         Self {
-            join: false,
+            connect: false,
             host: true,
         }
     }
 
     pub const fn all() -> Self {
         Self {
-            join: true,
+            connect: true,
             host: true,
         }
     }
@@ -58,16 +58,14 @@ impl ApiPermissions {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 struct ApiAccessPolicy {
-    disable_access_control: bool,
-    restrict_join: bool,
+    restrict_connect: bool,
     restrict_host: bool,
 }
 
 impl Default for ApiAccessPolicy {
     fn default() -> Self {
         Self {
-            disable_access_control: false,
-            restrict_join: true,
+            restrict_connect: true,
             restrict_host: true,
         }
     }
@@ -92,20 +90,21 @@ impl ApiAccessManager {
     pub fn get_permissions(&self, key: Option<&str>) -> ApiPermissions {
         let config = &self.config.api_access;
 
-        if config.policy.disable_access_control {
-            return ApiPermissions::all();
-        }
+        let default_perms = ApiPermissions {
+            connect: !config.policy.restrict_connect,
+            host: !config.policy.restrict_host,
+        };
 
         let Some(key) = key else {
-            return ApiPermissions::none();
+            return default_perms;
         };
 
         let Some(key_config) = config.keys.iter().find(|k| k.key == key) else {
-            return ApiPermissions::none();
+            return default_perms;
         };
 
         ApiPermissions {
-            join: !config.policy.restrict_join || key_config.permissions.join,
+            connect: !config.policy.restrict_connect || key_config.permissions.connect,
             host: !config.policy.restrict_host || key_config.permissions.host,
         }
     }

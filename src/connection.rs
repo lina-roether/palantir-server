@@ -1,112 +1,277 @@
-use std::{
-    sync::{
-        atomic::{AtomicI64, Ordering},
-        Arc,
-    },
-    time::Duration,
-};
+use std::{fmt::Display, sync::Arc, time::Duration};
 
-use anyhow::{Error, Result};
-use tokio::time::interval;
+use anyhow::{anyhow, Context};
+use futures::executor;
+use futures_util::{Future, SinkExt, StreamExt};
+use log::{debug, error, info};
+use serde::Deserialize;
+use tokio::{
+    net::{TcpListener, TcpStream},
+    time::timeout,
+};
+use tokio_tungstenite::WebSocketStream;
 
 use crate::{
     api_access::{ApiAccessManager, ApiPermissions},
-    listener::{ConnectionClosedReason, MessageChannel},
-    messages::{Message, MessageBody},
+    config::Config,
+    messages::{
+        ConnectionClientErrorMsgBodyV1, ConnectionClosedMsgBodyV1, ConnectionClosedReasonV1,
+        Message, MessageBody, MessageChannel,
+    },
     utils::timestamp,
 };
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct ServerConfig {
+    listen_on: String,
+}
+
+impl Default for ServerConfig {
+    fn default() -> Self {
+        Self {
+            listen_on: "127.0.0.1:8069".to_string(),
+        }
+    }
+}
+
+pub struct ConnectionListener {
+    config: ServerConfig,
+    listener: TcpListener,
+}
+
+impl ConnectionListener {
+    pub async fn bind(config: Arc<Config>) -> anyhow::Result<Self> {
+        let listener = TcpListener::bind(&config.server.listen_on)
+            .await
+            .context("Failed to start TCP server")?;
+        Ok(Self {
+            listener,
+            config: config.server.clone(),
+        })
+    }
+
+    pub async fn listen<F: Future<Output = anyhow::Result<()>> + Send>(
+        &self,
+        handler: impl Fn(Connection) -> F + Send + Sync + 'static,
+    ) {
+        info!("Server listening on {}...", self.config.listen_on);
+
+        let handler = Arc::new(handler);
+
+        loop {
+            let (stream, addr) = match self.listener.accept().await {
+                Ok(val) => val,
+                Err(err) => {
+                    error!("TCP connection failed: {err:?}");
+                    continue;
+                }
+            };
+            let handler_ref = Arc::clone(&handler);
+            tokio::spawn(async move {
+                if let Err(err) = Self::handle_connection(stream, handler_ref).await {
+                    error!("Error during connection with {addr}: {err:?}");
+                }
+            });
+        }
+    }
+
+    async fn handle_connection<F: Future<Output = anyhow::Result<()>>>(
+        stream: TcpStream,
+        handler: Arc<impl Fn(Connection) -> F>,
+    ) -> anyhow::Result<()> {
+        let ws = tokio_tungstenite::accept_async(stream)
+            .await
+            .context("Failed to accept websocket connection")?;
+
+        handler(Connection::new(ws)).await?;
+
+        Ok(())
+    }
+}
+
 pub struct Connection {
-    channel: Arc<MessageChannel>,
+    open: bool,
     permissions: ApiPermissions,
-    time_offset: Arc<AtomicI64>,
+    channel: MessageChannel<WebSocketStream<TcpStream>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PingResult {
+    time_offset: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CloseReason {
+    ServerError,
+    AuthFailed,
+    SessionClosed,
 }
 
 impl Connection {
-    const TIME_OFFSET_CHECK_PERIOD: Duration = Duration::from_secs(30);
+    const LOGIN_TIMEOUT: Duration = Duration::from_secs(3);
+    const PING_TIMEOUT: Duration = Duration::from_secs(1);
 
-    pub async fn new(channel: MessageChannel) -> Self {
+    pub fn new(ws: WebSocketStream<TcpStream>) -> Self {
         Self {
-            channel: Arc::new(channel),
+            open: true,
             permissions: ApiPermissions::default(),
-            time_offset: Arc::new(AtomicI64::new(0)),
+            channel: MessageChannel::new(ws),
         }
     }
 
-    pub async fn init(&mut self, access: &ApiAccessManager) {
-        if !self.authenticate(access).await {
-            return;
-        }
-
-        self.start_periodic_time_offset_update();
+    pub fn is_open(&self) -> bool {
+        self.open
     }
 
-    async fn authenticate(&mut self, access: &ApiAccessManager) -> bool {
-        let Some(auth_msg) = self.channel.next_response().await else {
-            let future = self.channel.close(
-                ConnectionClosedReason::AuthFailed,
-                "No authentication message received".to_string(),
-            );
-            future.await;
-            return false;
-        };
-
-        match auth_msg.body {
-            MessageBody::ConnectionLoginV1(body) => {
-                let permissions = access.get_permissions(body.api_key.as_deref());
-                self.permissions = permissions;
-                true
-            }
-            _ => {
-                self.channel
-                    .close(
-                        ConnectionClosedReason::AuthFailed,
-                        "Expected a login message".to_string(),
-                    )
-                    .await;
-                false
-            }
-        }
+    pub fn permissions(&self) -> &ApiPermissions {
+        &self.permissions
     }
 
-    async fn update_time_offset(channel: &MessageChannel, time_offset: &AtomicI64) -> Result<()> {
-        let sent_at = timestamp();
-        channel
-            .send(Message::new(MessageBody::ConnectionPingV1))
+    pub async fn init(&mut self, access_mgr: &ApiAccessManager) -> anyhow::Result<()> {
+        self.send(Message::new(MessageBody::ConnectionHelloV1))
             .await?;
 
-        let Some(response) = channel.next_response().await else {
-            return Err(Error::msg("No response to ping"));
-        };
-
-        match response.body {
-            MessageBody::ConnectionPongV1(body) => {
-                let received_at = timestamp();
-
-                let expected_time = received_at.saturating_sub(sent_at) / 2;
-                let reported_time = body.timestamp;
-                let offset = ((reported_time as i128) - (expected_time as i128)) as i64;
-                time_offset.store(offset, Ordering::Relaxed);
-                Ok(())
-            }
-            _ => {
-                channel
-                    .send_client_error("Expected pong message".to_string())
-                    .await;
-                Err(Error::msg("Unexpected response to ping"))
+        loop {
+            match timeout(Self::LOGIN_TIMEOUT, self.recv()).await {
+                Ok(None) => return Err(anyhow!("Connection closed before logging in")),
+                Ok(Some(Message {
+                    body: MessageBody::ConnectionLoginV1(body),
+                    ..
+                })) => {
+                    self.permissions = access_mgr.get_permissions(body.api_key.as_deref());
+                    if !self.permissions.connect {
+                        self.close(CloseReason::AuthFailed, "Unauthorized")
+                            .await
+                            .context("Failed to close unauthorized connection")?;
+                        return Err(anyhow!("Unauthorized"));
+                    } else {
+                        self.send(Message::new(MessageBody::ConnectionLoginAckV1))
+                            .await
+                            .context("Failed to send login ack message")?;
+                    }
+                }
+                Ok(Some(Message { .. })) => self.send_error("Expected login message").await,
+                Err(timeout_err) => {
+                    let err = anyhow!(timeout_err).context("Login message not received in time!");
+                    self.close(CloseReason::AuthFailed, &err)
+                        .await
+                        .context("Failed to close connection after failed authentication")?;
+                    return Err(err);
+                }
             }
         }
     }
 
-    fn start_periodic_time_offset_update(&self) {
-        let channel = Arc::clone(&self.channel);
-        let time_offset = Arc::clone(&self.time_offset);
+    pub async fn send(&mut self, message: Message) -> anyhow::Result<()> {
+        self.channel.send(message).await?;
+        Ok(())
+    }
 
-        tokio::spawn(async move {
-            let mut interval = interval(Self::TIME_OFFSET_CHECK_PERIOD);
-            loop {
-                Self::update_time_offset(&channel, &time_offset).await;
+    pub async fn send_error(&mut self, message: impl Display) {
+        let result = self
+            .send(Message::new(MessageBody::ConnectionClientErrorV1(
+                ConnectionClientErrorMsgBodyV1 {
+                    message: message.to_string(),
+                },
+            )))
+            .await;
+        if let Err(err) = result {
+            error!("Failed to send client error message: {err:?}")
+        }
+    }
+
+    pub async fn recv(&mut self) -> Option<Message> {
+        if !self.open {
+            return None;
+        }
+        loop {
+            let Some(msg_res) = self.channel.next().await else {
+                self.close_immediately().await;
+                return None;
+            };
+            match msg_res {
+                Ok(msg) => return Some(msg),
+                Err(err) => {
+                    debug!("Received malformed message from client: {err:?}");
+                    self.send_error(err.to_string()).await;
+                }
             }
-        });
+        }
+    }
+
+    pub async fn ping(&mut self) -> anyhow::Result<Option<PingResult>> {
+        let start_time = timestamp();
+        self.send(Message {
+            timestamp: start_time,
+            body: MessageBody::ConnectionPingV1,
+        })
+        .await?;
+
+        loop {
+            match timeout(Self::PING_TIMEOUT, self.recv()).await {
+                Ok(None) => return Ok(None),
+                Ok(Some(Message {
+                    timestamp: actual_timestamp,
+                    body: MessageBody::ConnectionPongV1,
+                })) => {
+                    let end_time = timestamp();
+                    let expected_timestamp = u64::abs_diff(start_time, end_time) / 2;
+                    let time_offset =
+                        u64::wrapping_sub(actual_timestamp, expected_timestamp) as i64;
+                    return Ok(Some(PingResult { time_offset }));
+                }
+                Ok(Some(Message { .. })) => {
+                    self.send_error("Expected pong message").await;
+                }
+                Err(timeout_err) => {
+                    let err = anyhow!(timeout_err).context("Pong message not received in time!");
+                    self.send_error(&err).await;
+                    return Err(err);
+                }
+            }
+        }
+    }
+
+    pub async fn close(
+        &mut self,
+        reason: CloseReason,
+        message: impl Display,
+    ) -> anyhow::Result<()> {
+        if !self.is_open() {
+            return Ok(());
+        }
+        let result = self
+            .send(Message::new(MessageBody::ConnectionClosedV1(
+                ConnectionClosedMsgBodyV1 {
+                    reason: match reason {
+                        CloseReason::ServerError => ConnectionClosedReasonV1::ServerError,
+                        CloseReason::SessionClosed => ConnectionClosedReasonV1::SessionClosed,
+                        CloseReason::AuthFailed => ConnectionClosedReasonV1::AuthFailed,
+                    },
+                    message: message.to_string(),
+                },
+            )))
+            .await;
+        self.close_immediately().await;
+        result
+    }
+
+    async fn close_immediately(&mut self) {
+        self.open = false;
+        if let Err(err) = self.channel.close().await {
+            error!("Failed to close websocket: {err:?}");
+        }
+    }
+}
+
+impl Drop for Connection {
+    fn drop(&mut self) {
+        if !self.is_open() {
+            return;
+        }
+        let close_future = self.close(CloseReason::ServerError, "Connection terminated");
+        if let Err(err) = executor::block_on(close_future) {
+            error!("Failed to close connection in drop: {err:?}")
+        }
     }
 }
