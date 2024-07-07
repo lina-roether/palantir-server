@@ -57,9 +57,9 @@ impl ApiPermissions {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
-struct ApiAccessPolicy {
-    restrict_connect: bool,
-    restrict_host: bool,
+pub struct ApiAccessPolicy {
+    pub restrict_connect: bool,
+    pub restrict_host: bool,
 }
 
 impl Default for ApiAccessPolicy {
@@ -74,8 +74,8 @@ impl Default for ApiAccessPolicy {
 #[derive(Debug, Deserialize, Default, Clone)]
 #[serde(default)]
 pub struct ApiAccessConfig {
-    policy: ApiAccessPolicy,
-    keys: Vec<ApiKey>,
+    pub policy: ApiAccessPolicy,
+    pub keys: Vec<ApiKey>,
 }
 
 pub struct ApiAccessManager {

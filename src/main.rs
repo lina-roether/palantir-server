@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use api_access::ApiAccessManager;
-use config::read_config;
+use api_access::{ApiAccessConfig, ApiAccessManager, ApiAccessPolicy};
+use config::{read_config, Config};
 use connection::{CloseReason, ConnectionListener};
 
 mod api_access;
@@ -15,7 +15,17 @@ mod utils;
 async fn main() {
     pretty_env_logger::init();
 
-    let config = read_config(None);
+    // let config = read_config(None);
+    let config = Arc::new(Config {
+        api_access: ApiAccessConfig {
+            policy: ApiAccessPolicy {
+                restrict_connect: false,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        ..Default::default()
+    });
 
     let access_mgr = Arc::new(ApiAccessManager::new(Arc::clone(&config)));
 
@@ -24,8 +34,7 @@ async fn main() {
         .listen(move |mut conn| {
             let access_mgr = Arc::clone(&access_mgr);
             async move {
-                let ping_res = conn.init(&access_mgr).await;
-                let _ = dbg!(ping_res);
+                conn.init(&access_mgr).await.unwrap();
                 conn.close(CloseReason::SessionClosed, "Session closed")
                     .await
                     .unwrap();

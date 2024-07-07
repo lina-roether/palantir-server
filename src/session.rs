@@ -1,7 +1,18 @@
-use std::{collections::HashMap, time::Duration};
+use std::{collections::HashMap, mem, sync::Arc};
 
-use parking_lot::RwLock;
+use anyhow::{anyhow, Context};
+use log::error;
+use parking_lot::{Mutex, RwLock};
+use tokio::{
+    sync::mpsc,
+    task::{JoinHandle, JoinSet},
+};
 use uuid::Uuid;
+
+use crate::{
+    connection::{CloseReason, Connection},
+    messages::{Message, MessageBody, SessionTerminateReasonV1, SessionTerminatedMsgBodyV1},
+};
 
 pub struct PlaybackState {
     playing: bool,
@@ -22,46 +33,157 @@ pub enum UserRole {
 }
 
 pub struct User {
-    name: String,
-    role: UserRole,
-    time_offset: i32,
+    pub name: String,
+    pub role: UserRole,
 }
 
 struct Session {
+    user: User,
+    command_tx: mpsc::Sender<SessionCommand>,
+    session_handle: JoinHandle<()>,
+}
+
+impl Session {
+    async fn new(user: User, mut connection: Connection) -> anyhow::Result<Self> {
+        let (command_tx, command_rx) = mpsc::channel::<SessionCommand>(16);
+        let session_handle = match user.role {
+            UserRole::Host => {
+                if !connection.permissions().host {
+                    let err = anyhow!("Not authorized to host sessions!");
+                    if let Err(err) = connection
+                        .send(Message::new(MessageBody::SessionTerminatedV1(
+                            SessionTerminatedMsgBodyV1 {
+                                reason: SessionTerminateReasonV1::Unauthorized,
+                                message: err.to_string(),
+                            },
+                        )))
+                        .await
+                    {
+                        error!("Failed to send session terminated message: {err:?}");
+                    }
+                    return Err(err);
+                }
+                tokio::spawn(Self::host_session(command_rx, connection))
+            }
+            UserRole::Guest => tokio::spawn(Self::guest_session(command_rx, connection)),
+        };
+        Ok(Self {
+            user,
+            command_tx,
+            session_handle,
+        })
+    }
+
+    async fn close(self, reason: SessionCloseReason, message: String) -> anyhow::Result<()> {
+        self.command_tx
+            .send(SessionCommand::Close { reason, message })
+            .await
+            .context("Failed to send close command to session")?;
+        self.session_handle
+            .await
+            .context("Failed to join session thread after close")?;
+        Ok(())
+    }
+
+    async fn host_session(
+        mut command_rx: mpsc::Receiver<SessionCommand>,
+        mut connection: Connection,
+    ) {
+        loop {
+            tokio::select! {
+                msg = connection.recv() => {
+                    todo!()
+                }
+                cmd = command_rx.recv() => {
+                    todo!()
+                }
+            }
+        }
+    }
+
+    async fn guest_session(command_rx: mpsc::Receiver<SessionCommand>, connection: Connection) {
+        todo!()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionCloseReason {
+    ClosedByHost,
+    Unauthorized,
+}
+
+#[derive(Debug, Clone)]
+enum SessionCommand {
+    Close {
+        reason: SessionCloseReason,
+        message: String,
+    },
+}
+
+struct Room {
     password: String,
-    users: HashMap<Uuid, User>,
+    sessions: RwLock<HashMap<Uuid, Mutex<Session>>>,
     media: Option<Media>,
 }
 
-const RESPONSE_TIMEOUT: Duration = Duration::from_secs(2);
+impl Room {
+    async fn run(self: Arc<Self>) {
+        todo!()
+    }
 
-impl Session {
-    fn new(password: String) -> Self {
-        Self {
-            password,
-            users: HashMap::new(),
-            media: None,
+    async fn add_session(&self, user: User, connection: Connection) -> anyhow::Result<Uuid> {
+        let session_id = Uuid::new_v4();
+        let session = Session::new(user, connection).await?;
+        self.sessions
+            .write()
+            .insert(session_id, Mutex::new(session));
+        Ok(session_id)
+    }
+
+    async fn close(
+        &self,
+        session_id: Uuid,
+        reason: SessionCloseReason,
+        message: String,
+    ) -> anyhow::Result<()> {
+        if let Some(session) = self.remove_session(session_id) {
+            session.close(reason, message).await?;
+        }
+        Ok(())
+    }
+
+    async fn close_all(&mut self, reason: SessionCloseReason, message: String) {
+        let session_ids = self.sessions.read().keys().copied().collect::<Vec<_>>();
+        let results = futures::future::join_all(
+            session_ids
+                .into_iter()
+                .map(|session_id| self.close(session_id, reason, message.clone())),
+        )
+        .await;
+
+        for result in results {
+            if let Err(err) = result {
+                error!("{err:?}");
+            }
         }
     }
-}
 
-struct SessionManager {
-    sessions: HashMap<Uuid, RwLock<Session>>,
-}
-
-impl SessionManager {
-    fn start_session(&mut self, password: String) -> Uuid {
-        let id = Uuid::new_v4();
+    fn remove_session(&self, session_id: Uuid) -> Option<Session> {
         self.sessions
-            .insert(id, RwLock::new(Session::new(password)));
-        id
+            .write()
+            .remove(&session_id)
+            .map(Mutex::into_inner)
     }
+}
 
-    fn get_session(&self, id: Uuid) -> Option<&RwLock<Session>> {
-        self.sessions.get(&id)
-    }
+struct RoomRegistry {
+    rooms: HashMap<Uuid, Arc<RwLock<Room>>>,
+}
 
-    fn stop_session(&mut self, id: Uuid) {
-        self.sessions.remove(&id);
+impl RoomRegistry {
+    pub fn new() -> Self {
+        Self {
+            rooms: HashMap::new(),
+        }
     }
 }

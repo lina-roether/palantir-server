@@ -1,4 +1,4 @@
-use std::{fmt::Display, sync::Arc, time::Duration};
+use std::{default, fmt::Display, sync::Arc, time::Duration};
 
 use anyhow::{anyhow, Context};
 use futures::executor;
@@ -103,7 +103,7 @@ pub struct PingResult {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CloseReason {
     ServerError,
-    AuthFailed,
+    Unauthorized,
     SessionClosed,
 }
 
@@ -128,10 +128,7 @@ impl Connection {
     }
 
     pub async fn init(&mut self, access_mgr: &ApiAccessManager) -> anyhow::Result<()> {
-        self.send(Message::new(MessageBody::ConnectionHelloV1))
-            .await?;
-
-        loop {
+        'wait_for_login: loop {
             match timeout(Self::LOGIN_TIMEOUT, self.recv()).await {
                 Ok(None) => return Err(anyhow!("Connection closed before logging in")),
                 Ok(Some(Message {
@@ -140,7 +137,7 @@ impl Connection {
                 })) => {
                     self.permissions = access_mgr.get_permissions(body.api_key.as_deref());
                     if !self.permissions.connect {
-                        self.close(CloseReason::AuthFailed, "Unauthorized")
+                        self.close(CloseReason::Unauthorized, "Unauthorized")
                             .await
                             .context("Failed to close unauthorized connection")?;
                         return Err(anyhow!("Unauthorized"));
@@ -148,18 +145,20 @@ impl Connection {
                         self.send(Message::new(MessageBody::ConnectionLoginAckV1))
                             .await
                             .context("Failed to send login ack message")?;
+                        break 'wait_for_login;
                     }
                 }
                 Ok(Some(Message { .. })) => self.send_error("Expected login message").await,
                 Err(timeout_err) => {
                     let err = anyhow!(timeout_err).context("Login message not received in time!");
-                    self.close(CloseReason::AuthFailed, &err)
+                    self.close(CloseReason::Unauthorized, &err)
                         .await
                         .context("Failed to close connection after failed authentication")?;
                     return Err(err);
                 }
             }
         }
+        Ok(())
     }
 
     pub async fn send(&mut self, message: Message) -> anyhow::Result<()> {
@@ -254,7 +253,7 @@ impl Connection {
                     reason: match reason {
                         CloseReason::ServerError => ConnectionClosedReasonV1::ServerError,
                         CloseReason::SessionClosed => ConnectionClosedReasonV1::SessionClosed,
-                        CloseReason::AuthFailed => ConnectionClosedReasonV1::AuthFailed,
+                        CloseReason::Unauthorized => ConnectionClosedReasonV1::Unauthorized,
                     },
                     message: message.to_string(),
                 },

@@ -20,8 +20,8 @@ pub struct ConnectionLoginMsgBodyV1 {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ConnectionClosedReasonV1 {
-    #[serde(rename = "auth_failed")]
-    AuthFailed,
+    #[serde(rename = "unauthorized")]
+    Unauthorized,
 
     #[serde(rename = "server_error")]
     ServerError,
@@ -86,6 +86,9 @@ pub struct SessionStateMsgBodyV1 {
 pub enum SessionTerminateReasonV1 {
     #[serde(rename = "closed_by_host")]
     ClosedByHost,
+
+    #[serde(rename = "unauthorized")]
+    Unauthorized,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -112,9 +115,6 @@ pub struct PlaybackSyncMsgBodyV1 {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "m")]
 pub enum MessageBody {
-    #[serde(rename = "connection::hello/v1")]
-    ConnectionHelloV1,
-
     #[serde(rename = "connection::login/v1")]
     ConnectionLoginV1(ConnectionLoginMsgBodyV1),
 
@@ -179,13 +179,25 @@ impl Message {
     }
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+enum MessageFormat {
+    Json,
+
+    #[default]
+    Msgpack,
+}
+
 pub struct MessageChannel<S> {
+    format: MessageFormat,
     ws: S,
 }
 
 impl<S> MessageChannel<S> {
     pub fn new(ws: S) -> Self {
-        Self { ws }
+        Self {
+            format: MessageFormat::default(),
+            ws,
+        }
     }
 }
 
@@ -209,9 +221,15 @@ where
     }
 
     fn start_send(mut self: Pin<&mut Self>, item: Message) -> Result<(), Self::Error> {
-        let data = rmp_serde::to_vec(&item).context("Failed to serialize message")?;
-        self.ws
-            .start_send_unpin(tungstenite::Message::Binary(data))?;
+        let msg = match self.format {
+            MessageFormat::Msgpack => tungstenite::Message::Binary(
+                rmp_serde::to_vec(&item).context("Failed to serialize message as MsgPack")?,
+            ),
+            MessageFormat::Json => tungstenite::Message::Text(
+                serde_json::to_string(&item).context("Failed to serialize message as JSON")?,
+            ),
+        };
+        self.ws.start_send_unpin(msg)?;
         Ok(())
     }
 }
@@ -238,16 +256,24 @@ where
                 Ok(msg) => msg,
                 Err(err) => return Some(Err(err.into())),
             };
-            let tungstenite::Message::Binary(data) = msg else {
-                return Some(Err(anyhow!("Only binary messages are accepted.")));
-            };
-            let deserialized = match rmp_serde::from_slice(&data) {
-                Ok(d) => d,
-                Err(err) => {
-                    return Some(Err(err.into()));
+            let deserialized_res: anyhow::Result<Message> = match msg {
+                tungstenite::Message::Binary(data) => {
+                    self.format = MessageFormat::Msgpack;
+                    rmp_serde::from_slice(&data).map_err(|err| {
+                        anyhow!(err).context("Failed to deserialize binary message as MsgPack")
+                    })
+                }
+                tungstenite::Message::Text(data) => {
+                    self.format = MessageFormat::Json;
+                    serde_json::from_str(&data).map_err(|err| {
+                        anyhow!(err).context("Failed to deserialize text message as JSON")
+                    })
+                }
+                _ => {
+                    return Some(Err(anyhow!("Only binary and text messages are accepted.")));
                 }
             };
-            Some(Ok(deserialized))
+            Some(deserialized_res)
         })
     }
 }
