@@ -186,7 +186,7 @@ impl Connection {
         }
         loop {
             let Some(msg_res) = self.channel.next().await else {
-                self.close_immediately().await;
+                self.close_silent().await;
                 return None;
             };
             match msg_res {
@@ -260,11 +260,11 @@ impl Connection {
                 },
             )))
             .await;
-        self.close_immediately().await;
+        self.close_silent().await;
         result
     }
 
-    async fn close_immediately(&mut self) {
+    async fn close_silent(&mut self) {
         self.open = false;
         if let Err(err) = self.channel.close().await {
             error!("Failed to close websocket: {err:?}");
