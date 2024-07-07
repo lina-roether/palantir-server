@@ -1,16 +1,13 @@
-use std::{collections::HashMap, mem, sync::Arc};
+use std::{collections::HashMap, error::Error, fmt, sync::Arc};
 
 use anyhow::{anyhow, Context};
 use log::error;
 use parking_lot::{Mutex, RwLock};
-use tokio::{
-    sync::mpsc,
-    task::{JoinHandle, JoinSet},
-};
+use tokio::{sync::mpsc, task::JoinHandle};
 use uuid::Uuid;
 
 use crate::{
-    connection::{CloseReason, Connection},
+    connection::Connection,
     messages::{Message, MessageBody, SessionTerminateReasonV1, SessionTerminatedMsgBodyV1},
 };
 
@@ -41,6 +38,78 @@ struct Session {
     user: User,
     command_tx: mpsc::Sender<SessionCommand>,
     session_handle: JoinHandle<()>,
+}
+
+struct SessionThread {
+    open: bool,
+    connection: Connection,
+}
+
+impl SessionThread {
+    fn new(connection: Connection) -> Self {
+        Self {
+            open: true,
+            connection,
+        }
+    }
+
+    async fn recv(&mut self) -> Option<Message> {
+        self.connection.recv().await
+    }
+
+    async fn close(&mut self, reason: SessionCloseReason, message: String) -> anyhow::Result<()> {
+        self.connection
+            .send(Message::new(MessageBody::SessionTerminatedV1(
+                SessionTerminatedMsgBodyV1 {
+                    reason: match reason {
+                        SessionCloseReason::ClosedByHost => SessionTerminateReasonV1::ClosedByHost,
+                        SessionCloseReason::Unauthorized => SessionTerminateReasonV1::Unauthorized,
+                        SessionCloseReason::ServerError => SessionTerminateReasonV1::ServerError,
+                    },
+                    message,
+                },
+            )))
+            .await?;
+        self.open = false;
+        Ok(())
+    }
+
+    async fn close_server_error(
+        &mut self,
+        err: impl fmt::Display + fmt::Debug,
+    ) -> anyhow::Result<()> {
+        let message = if cfg!(debug_assertions) {
+            err.to_string()
+        } else {
+            "Internal Server Error".to_string()
+        };
+        error!("Session closed: {err:?}");
+        self.close(SessionCloseReason::ServerError, message).await
+    }
+
+    async fn handle_cmd(&mut self, cmd: Option<SessionCommand>) -> anyhow::Result<()> {
+        let Some(cmd) = cmd else {
+            self.close_server_error(anyhow!("Command channel closed for session thread"))
+                .await
+                .context("Failed to close session after server error")?;
+            return Ok(());
+        };
+        match cmd {
+            SessionCommand::Close { reason, message } => self.close(reason, message).await,
+        }
+    }
+
+    async fn run(&mut self, mut command_rx: mpsc::Receiver<SessionCommand>) {
+        while self.open {
+            let result = tokio::select! {
+                cmd = command_rx.recv() => self.handle_cmd(cmd).await,
+                _msg = self.recv() => todo!()
+            };
+            if let Err(err) = result {
+                error!("Error occurred on session thread: {err:?}");
+            }
+        }
+    }
 }
 
 impl Session {
@@ -85,24 +154,14 @@ impl Session {
         Ok(())
     }
 
-    async fn host_session(
-        mut command_rx: mpsc::Receiver<SessionCommand>,
-        mut connection: Connection,
-    ) {
-        loop {
-            tokio::select! {
-                msg = connection.recv() => {
-                    todo!()
-                }
-                cmd = command_rx.recv() => {
-                    todo!()
-                }
-            }
-        }
+    async fn host_session(command_rx: mpsc::Receiver<SessionCommand>, connection: Connection) {
+        let mut thread = SessionThread::new(connection);
+        thread.run(command_rx).await;
     }
 
     async fn guest_session(command_rx: mpsc::Receiver<SessionCommand>, connection: Connection) {
-        todo!()
+        let mut thread = SessionThread::new(connection);
+        thread.run(command_rx).await;
     }
 }
 
@@ -110,6 +169,7 @@ impl Session {
 enum SessionCloseReason {
     ClosedByHost,
     Unauthorized,
+    ServerError,
 }
 
 #[derive(Debug, Clone)]

@@ -89,6 +89,9 @@ pub enum SessionTerminateReasonV1 {
 
     #[serde(rename = "unauthorized")]
     Unauthorized,
+
+    #[serde(rename = "server_error")]
+    ServerError,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
