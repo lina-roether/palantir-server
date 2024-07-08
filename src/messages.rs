@@ -101,7 +101,7 @@ pub struct SessionTerminatedMsgBodyV1 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MediaSelectMsgBodyV1 {
+pub struct PlaybackSelectMsgBodyV1 {
     pub page_href: String,
     pub frame_href: String,
     pub element_query: String,
@@ -160,8 +160,8 @@ pub enum MessageBody {
     #[serde(rename = "session::state/v1")]
     SessionStateV1(SessionStateMsgBodyV1),
 
-    #[serde(rename = "media::select/v1")]
-    MediaSelectV1(MediaSelectMsgBodyV1),
+    #[serde(rename = "playback::select/v1")]
+    PlaybackSelectV1(PlaybackSelectMsgBodyV1),
 
     #[serde(rename = "playback::sync/v1")]
     PlaybackSyncV1(PlaybackSyncMsgBodyV1),

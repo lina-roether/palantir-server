@@ -1,9 +1,12 @@
-use std::{collections::HashMap, fmt, sync::Arc};
+use std::{collections::HashMap, fmt, sync::Arc, time::Duration};
 
 use anyhow::{anyhow, Context};
 use log::{debug, error};
 use parking_lot::{Mutex, RwLock};
-use tokio::{sync::mpsc, task::JoinHandle};
+use tokio::{
+    sync::mpsc,
+    task::{AbortHandle, JoinHandle},
+};
 use uuid::Uuid;
 
 use crate::{
@@ -51,6 +54,7 @@ struct Session {
     command_tx: mpsc::Sender<SessionCommand>,
     message_rx: mpsc::Receiver<Message>,
     session_handle: JoinHandle<()>,
+    timer_handle: AbortHandle,
 }
 
 struct SessionThread {
@@ -142,13 +146,19 @@ impl SessionThread {
         }
     }
 
-    async fn handle_msg(&mut self, msg: Option<Message>) -> anyhow::Result<()> {
+    async fn handle_msg_generic(&mut self, msg: Option<Message>) -> anyhow::Result<()> {
         let Some(msg) = msg else {
             debug!("Connection was closed");
             return Ok(());
         };
         match msg.body {
             MessageBody::SessionLeaveV1 => self.leave().await.context("Failed to leave session")?,
+            MessageBody::SessionStateV1(..) | MessageBody::SessionTerminatedV1(..) => {
+                self.connection.send_error("Unexpected message type").await;
+            }
+            MessageBody::SessionStartV1(..) | MessageBody::SessionJoinV1(..) => {
+                self.connection.send_error("Already in a session!").await;
+            }
             _ => self.message_tx.send(msg).await?,
         }
         Ok(())
@@ -168,11 +178,33 @@ impl SessionThread {
 }
 
 impl Session {
+    const PING_INTERVAL: Duration = Duration::from_secs(30);
+
     async fn new(user: User, mut connection: Connection) -> anyhow::Result<Self> {
         let state = Arc::new(Mutex::new(SessionState::default()));
         let (command_tx, command_rx) = mpsc::channel::<SessionCommand>(16);
         let (message_tx, message_rx) = mpsc::channel::<Message>(64);
-        let session_handle = match user.role {
+        let session_handle =
+            Self::start_session_thread(&user, &state, connection, command_rx, message_tx).await?;
+        let timer_handle = Self::start_ping_timer(command_tx.clone());
+        Ok(Self {
+            user,
+            state: Arc::new(Mutex::new(SessionState::default())),
+            command_tx,
+            message_rx,
+            session_handle,
+            timer_handle,
+        })
+    }
+
+    async fn start_session_thread(
+        user: &User,
+        state: &Arc<Mutex<SessionState>>,
+        mut connection: Connection,
+        command_rx: mpsc::Receiver<SessionCommand>,
+        message_tx: mpsc::Sender<Message>,
+    ) -> anyhow::Result<JoinHandle<()>> {
+        match user.role {
             UserRole::Host => {
                 if !connection.permissions().host {
                     let err = anyhow!("Not authorized to host sessions!");
@@ -189,30 +221,37 @@ impl Session {
                     }
                     return Err(err);
                 }
-                tokio::spawn(Self::host_session(
-                    Arc::clone(&state),
+                Ok(tokio::spawn(Self::host_session(
+                    Arc::clone(state),
                     command_rx,
                     message_tx,
                     connection,
-                ))
+                )))
             }
-            UserRole::Guest => tokio::spawn(Self::guest_session(
-                Arc::clone(&state),
+            UserRole::Guest => Ok(tokio::spawn(Self::guest_session(
+                Arc::clone(state),
                 command_rx,
                 message_tx,
                 connection,
-            )),
-        };
-        Ok(Self {
-            user,
-            state: Arc::new(Mutex::new(SessionState::default())),
-            command_tx,
-            message_rx,
-            session_handle,
+            ))),
+        }
+    }
+
+    fn start_ping_timer(command_tx: mpsc::Sender<SessionCommand>) -> AbortHandle {
+        tokio::spawn(async move {
+            loop {
+                if let Err(err) = command_tx.send(SessionCommand::UpdateTimeOffset).await {
+                    error!("Error occurred on ping timer thread: {err:?}");
+                    break;
+                }
+                tokio::time::sleep(Self::PING_INTERVAL).await;
+            }
         })
+        .abort_handle()
     }
 
     async fn close(self, reason: SessionCloseReason, message: String) -> anyhow::Result<()> {
+        self.timer_handle.abort();
         self.command_tx
             .send(SessionCommand::Close { reason, message })
             .await
