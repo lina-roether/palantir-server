@@ -1,7 +1,7 @@
-use std::{collections::HashMap, error::Error, fmt, sync::Arc};
+use std::{collections::HashMap, fmt, sync::Arc};
 
 use anyhow::{anyhow, Context};
-use log::error;
+use log::{debug, error};
 use parking_lot::{Mutex, RwLock};
 use tokio::{sync::mpsc, task::JoinHandle};
 use uuid::Uuid;
@@ -34,23 +34,48 @@ pub struct User {
     pub role: UserRole,
 }
 
+struct SessionState {
+    time_offset: i64,
+}
+
+#[allow(clippy::derivable_impls)]
+impl Default for SessionState {
+    fn default() -> Self {
+        Self { time_offset: 0 }
+    }
+}
+
 struct Session {
     user: User,
+    state: Arc<Mutex<SessionState>>,
     command_tx: mpsc::Sender<SessionCommand>,
+    message_rx: mpsc::Receiver<Message>,
     session_handle: JoinHandle<()>,
 }
 
 struct SessionThread {
     open: bool,
+    state: Arc<Mutex<SessionState>>,
+    message_tx: mpsc::Sender<Message>,
     connection: Connection,
 }
 
 impl SessionThread {
-    fn new(connection: Connection) -> Self {
+    fn new(
+        state: Arc<Mutex<SessionState>>,
+        connection: Connection,
+        message_tx: mpsc::Sender<Message>,
+    ) -> Self {
         Self {
             open: true,
+            state,
+            message_tx,
             connection,
         }
+    }
+
+    async fn send(&mut self, message: Message) -> anyhow::Result<()> {
+        self.connection.send(message).await
     }
 
     async fn recv(&mut self) -> Option<Message> {
@@ -74,6 +99,14 @@ impl SessionThread {
         Ok(())
     }
 
+    async fn leave(&mut self) -> anyhow::Result<()> {
+        self.open = false;
+        self.connection
+            .send(Message::new(MessageBody::SessionLeaveAckV1))
+            .await?;
+        Ok(())
+    }
+
     async fn close_server_error(
         &mut self,
         err: impl fmt::Display + fmt::Debug,
@@ -87,6 +120,14 @@ impl SessionThread {
         self.close(SessionCloseReason::ServerError, message).await
     }
 
+    async fn update_time_offset(&mut self) -> anyhow::Result<()> {
+        let Some(result) = self.connection.ping().await? else {
+            return Err(anyhow!("Connection was closed!"));
+        };
+        self.state.lock().time_offset = result.time_offset;
+        Ok(())
+    }
+
     async fn handle_cmd(&mut self, cmd: Option<SessionCommand>) -> anyhow::Result<()> {
         let Some(cmd) = cmd else {
             self.close_server_error(anyhow!("Command channel closed for session thread"))
@@ -95,8 +136,22 @@ impl SessionThread {
             return Ok(());
         };
         match cmd {
+            SessionCommand::Send(msg) => self.send(msg).await,
+            SessionCommand::UpdateTimeOffset => self.update_time_offset().await,
             SessionCommand::Close { reason, message } => self.close(reason, message).await,
         }
+    }
+
+    async fn handle_msg(&mut self, msg: Option<Message>) -> anyhow::Result<()> {
+        let Some(msg) = msg else {
+            debug!("Connection was closed");
+            return Ok(());
+        };
+        match msg.body {
+            MessageBody::SessionLeaveV1 => self.leave().await.context("Failed to leave session")?,
+            _ => self.message_tx.send(msg).await?,
+        }
+        Ok(())
     }
 
     async fn run(&mut self, mut command_rx: mpsc::Receiver<SessionCommand>) {
@@ -114,7 +169,9 @@ impl SessionThread {
 
 impl Session {
     async fn new(user: User, mut connection: Connection) -> anyhow::Result<Self> {
+        let state = Arc::new(Mutex::new(SessionState::default()));
         let (command_tx, command_rx) = mpsc::channel::<SessionCommand>(16);
+        let (message_tx, message_rx) = mpsc::channel::<Message>(64);
         let session_handle = match user.role {
             UserRole::Host => {
                 if !connection.permissions().host {
@@ -132,13 +189,25 @@ impl Session {
                     }
                     return Err(err);
                 }
-                tokio::spawn(Self::host_session(command_rx, connection))
+                tokio::spawn(Self::host_session(
+                    Arc::clone(&state),
+                    command_rx,
+                    message_tx,
+                    connection,
+                ))
             }
-            UserRole::Guest => tokio::spawn(Self::guest_session(command_rx, connection)),
+            UserRole::Guest => tokio::spawn(Self::guest_session(
+                Arc::clone(&state),
+                command_rx,
+                message_tx,
+                connection,
+            )),
         };
         Ok(Self {
             user,
+            state: Arc::new(Mutex::new(SessionState::default())),
             command_tx,
+            message_rx,
             session_handle,
         })
     }
@@ -154,13 +223,23 @@ impl Session {
         Ok(())
     }
 
-    async fn host_session(command_rx: mpsc::Receiver<SessionCommand>, connection: Connection) {
-        let mut thread = SessionThread::new(connection);
+    async fn host_session(
+        state: Arc<Mutex<SessionState>>,
+        command_rx: mpsc::Receiver<SessionCommand>,
+        message_tx: mpsc::Sender<Message>,
+        connection: Connection,
+    ) {
+        let mut thread = SessionThread::new(state, connection, message_tx);
         thread.run(command_rx).await;
     }
 
-    async fn guest_session(command_rx: mpsc::Receiver<SessionCommand>, connection: Connection) {
-        let mut thread = SessionThread::new(connection);
+    async fn guest_session(
+        state: Arc<Mutex<SessionState>>,
+        command_rx: mpsc::Receiver<SessionCommand>,
+        message_tx: mpsc::Sender<Message>,
+        connection: Connection,
+    ) {
+        let mut thread = SessionThread::new(state, connection, message_tx);
         thread.run(command_rx).await;
     }
 }
@@ -174,6 +253,8 @@ enum SessionCloseReason {
 
 #[derive(Debug, Clone)]
 enum SessionCommand {
+    Send(Message),
+    UpdateTimeOffset,
     Close {
         reason: SessionCloseReason,
         message: String,

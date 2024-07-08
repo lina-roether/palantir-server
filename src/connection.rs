@@ -97,7 +97,7 @@ pub struct Connection {
 
 #[derive(Debug, Clone)]
 pub struct PingResult {
-    time_offset: i64,
+    pub time_offset: i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -196,6 +196,25 @@ impl Connection {
                     if let Err(err) = self.send(Message::new(MessageBody::ConnectionPongV1)).await {
                         error!("Failed to send pong: {err:?}");
                     }
+                }
+                Ok(Message {
+                    body: MessageBody::ConnectionKeepaliveV1,
+                    ..
+                }) => {
+                    // do nothing
+                }
+                Ok(Message {
+                    body:
+                        MessageBody::ConnectionPongV1
+                        | MessageBody::ConnectionLoginAckV1
+                        | MessageBody::ConnectionLoginV1(..)
+                        | MessageBody::ConnectionClosedV1(..)
+                        | MessageBody::ConnectionClientErrorV1(..),
+                    ..
+                }) => {
+                    // These message types should be handled on the connection layer, but weren't
+                    // expected at this time.
+                    self.send_error("Unexpected message type").await;
                 }
                 Ok(msg) => return Some(msg),
                 Err(err) => {

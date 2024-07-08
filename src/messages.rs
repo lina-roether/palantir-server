@@ -13,12 +13,12 @@ use uuid::Uuid;
 
 use crate::utils::timestamp;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConnectionLoginMsgBodyV1 {
     pub api_key: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ConnectionClosedReasonV1 {
     #[serde(rename = "unauthorized")]
     Unauthorized,
@@ -36,31 +36,31 @@ pub enum ConnectionClosedReasonV1 {
     Unknown,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConnectionClosedMsgBodyV1 {
     pub reason: ConnectionClosedReasonV1,
     pub message: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConnectionClientErrorMsgBodyV1 {
     pub message: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionStartMsgBodyV1 {
     pub name: String,
     pub password: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionJoinMsgBodyV1 {
     pub id: Uuid,
     pub name: String,
     pub password: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SessionUserRoleV1 {
     #[serde(rename = "host")]
     Host,
@@ -69,20 +69,20 @@ pub enum SessionUserRoleV1 {
     Guest,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionUserV1 {
     pub name: String,
     pub role: SessionUserRoleV1,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionStateMsgBodyV1 {
     pub id: Uuid,
     pub password: String,
     pub users: Vec<SessionUserV1>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SessionTerminateReasonV1 {
     #[serde(rename = "closed_by_host")]
     ClosedByHost,
@@ -94,20 +94,20 @@ pub enum SessionTerminateReasonV1 {
     ServerError,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionTerminatedMsgBodyV1 {
     pub reason: SessionTerminateReasonV1,
     pub message: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MediaSelectMsgBodyV1 {
     pub page_href: String,
     pub frame_href: String,
     pub element_query: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlaybackSyncMsgBodyV1 {
     pub active_sync: bool,
     pub playing: bool,
@@ -115,7 +115,7 @@ pub struct PlaybackSyncMsgBodyV1 {
     pub timestamp: SystemTime,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "m")]
 pub enum MessageBody {
     #[serde(rename = "connection::login/v1")]
@@ -136,6 +136,9 @@ pub enum MessageBody {
     #[serde(rename = "connection::closed/v1")]
     ConnectionClosedV1(ConnectionClosedMsgBodyV1),
 
+    #[serde(rename = "connection::keepalive/v1")]
+    ConnectionKeepaliveV1,
+
     #[serde(rename = "session::start/v1")]
     SessionStartV1(SessionStartMsgBodyV1),
 
@@ -148,14 +151,14 @@ pub enum MessageBody {
     #[serde(rename = "session::leave/v1")]
     SessionLeaveV1,
 
+    #[serde(rename = "session::leave_ack/v1")]
+    SessionLeaveAckV1,
+
     #[serde(rename = "session::terminated/v1")]
     SessionTerminatedV1(SessionTerminatedMsgBodyV1),
 
     #[serde(rename = "session::state/v1")]
     SessionStateV1(SessionStateMsgBodyV1),
-
-    #[serde(rename = "session::keepalive/v1")]
-    SessionKeepaliveV1,
 
     #[serde(rename = "media::select/v1")]
     MediaSelectV1(MediaSelectMsgBodyV1),
@@ -164,7 +167,7 @@ pub enum MessageBody {
     PlaybackSyncV1(PlaybackSyncMsgBodyV1),
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
     #[serde(rename = "t")]
     pub timestamp: u64,
@@ -182,7 +185,7 @@ impl Message {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Copy, PartialEq, Eq)]
 enum MessageFormat {
     Json,
 
