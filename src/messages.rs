@@ -71,6 +71,7 @@ pub enum RoomUserRoleV1 {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoomUserV1 {
+    pub id: Uuid,
     pub name: String,
     pub role: RoomUserRoleV1,
 }
@@ -78,6 +79,7 @@ pub struct RoomUserV1 {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoomStateMsgBodyV1 {
     pub id: Uuid,
+    pub name: String,
     pub password: String,
     pub users: Vec<RoomUserV1>,
 }
@@ -166,6 +168,9 @@ pub enum MessageBody {
 
     #[serde(rename = "room::disconnected/v1")]
     RoomDisconnectedV1(RoomDisconnectedMsgBodyV1),
+
+    #[serde(rename = "room::request_state/v1")]
+    RoomRequestStateV1,
 
     #[serde(rename = "room::state/v1")]
     RoomStateV1(RoomStateMsgBodyV1),
