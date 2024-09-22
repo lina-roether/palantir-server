@@ -3,7 +3,7 @@ use std::{fmt::Display, sync::Arc, time::Duration};
 use anyhow::{anyhow, Context};
 use futures::executor;
 use futures_util::Future;
-use log::{debug, error, info};
+use log::{debug, error, info, trace};
 use serde::Deserialize;
 use tokio::{
     net::{TcpListener, TcpStream},
@@ -249,7 +249,7 @@ impl Connection {
                     let expected_timestamp = start_time + u64::abs_diff(start_time, end_time) / 2;
                     let time_offset =
                         u64::wrapping_sub(actual_timestamp, expected_timestamp) as i64;
-                    debug!(
+                    trace!(
                         "Pinged client {}, and found a time offset of {time_offset}ms",
                         self.name
                     );
