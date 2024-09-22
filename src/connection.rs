@@ -68,7 +68,9 @@ impl ConnectionListener {
             };
             let handler_ref = Arc::clone(&handler);
             tokio::spawn(async move {
-                if let Err(err) = Self::handle_connection(stream, handler_ref).await {
+                if let Err(err) =
+                    Self::handle_connection(addr.to_string(), stream, handler_ref).await
+                {
                     error!("Error during connection with {addr}: {err:?}");
                 }
             });
@@ -76,6 +78,7 @@ impl ConnectionListener {
     }
 
     async fn handle_connection<F: Future<Output = anyhow::Result<()>>>(
+        name: String,
         stream: TcpStream,
         handler: Arc<impl Fn(Connection) -> F>,
     ) -> anyhow::Result<()> {
@@ -83,7 +86,7 @@ impl ConnectionListener {
             .await
             .context("Failed to accept websocket connection")?;
 
-        handler(Connection::new(ws)).await?;
+        handler(Connection::new(name, ws)).await?;
 
         Ok(())
     }
@@ -91,6 +94,7 @@ impl ConnectionListener {
 
 pub struct Connection {
     open: bool,
+    name: String,
     username: Option<String>,
     permissions: ApiPermissions,
     channel: MessageChannel<WebSocketStream<TcpStream>>,
@@ -112,9 +116,11 @@ impl Connection {
     const LOGIN_TIMEOUT: Duration = Duration::from_secs(3);
     const PING_TIMEOUT: Duration = Duration::from_secs(1);
 
-    pub fn new(ws: WebSocketStream<TcpStream>) -> Self {
+    pub fn new(name: String, ws: WebSocketStream<TcpStream>) -> Self {
+        debug!("Creating connection {name}");
         Self {
             open: true,
+            name,
             username: None,
             permissions: ApiPermissions::default(),
             channel: MessageChannel::new(ws),
@@ -137,6 +143,7 @@ impl Connection {
     }
 
     pub async fn init(&mut self, access_mgr: &ApiAccessManager) -> anyhow::Result<()> {
+        debug!("Waiting for login message on connection {}...", self.name);
         'wait_for_login: loop {
             match timeout(Self::LOGIN_TIMEOUT, self.recv()).await {
                 Ok(None) => return Err(anyhow!("Connection closed before logging in")),
@@ -168,6 +175,7 @@ impl Connection {
                 }
             }
         }
+        debug!("Connection {} logged in successfully", self.name);
         Ok(())
     }
 
@@ -177,16 +185,13 @@ impl Connection {
     }
 
     pub async fn send_error(&mut self, message: impl Display) {
-        let result = self
+        let _ = self
             .send(Message::new(MessageBody::ConnectionClientErrorV1(
                 ConnectionClientErrorMsgBodyV1 {
                     message: message.to_string(),
                 },
             )))
             .await;
-        if let Err(err) = result {
-            error!("Failed to send client error message: {err:?}")
-        }
     }
 
     pub async fn recv(&mut self) -> Option<Message> {
@@ -204,7 +209,7 @@ impl Connection {
                     ..
                 }) => {
                     if let Err(err) = self.send(Message::new(MessageBody::ConnectionPongV1)).await {
-                        error!("Failed to send pong: {err:?}");
+                        error!("Failed to send pong to client {}: {err:?}", self.name);
                     }
                 }
                 Ok(Message {
@@ -213,22 +218,12 @@ impl Connection {
                 }) => {
                     // do nothing
                 }
-                Ok(Message {
-                    body:
-                        MessageBody::ConnectionPongV1
-                        | MessageBody::ConnectionLoginAckV1
-                        | MessageBody::ConnectionLoginV1(..)
-                        | MessageBody::ConnectionClosedV1(..)
-                        | MessageBody::ConnectionClientErrorV1(..),
-                    ..
-                }) => {
-                    // These message types should be handled on the connection layer, but weren't
-                    // expected at this time.
-                    self.send_error("Unexpected message type").await;
-                }
                 Ok(msg) => return Some(msg),
                 Err(err) => {
-                    debug!("Received malformed message from client: {err:?}");
+                    debug!(
+                        "Received malformed message from client {}: {err:?}",
+                        self.name
+                    );
                     self.send_error(err.to_string()).await;
                 }
             }
@@ -251,9 +246,13 @@ impl Connection {
                     body: MessageBody::ConnectionPongV1,
                 })) => {
                     let end_time = timestamp();
-                    let expected_timestamp = u64::abs_diff(start_time, end_time) / 2;
+                    let expected_timestamp = start_time + u64::abs_diff(start_time, end_time) / 2;
                     let time_offset =
                         u64::wrapping_sub(actual_timestamp, expected_timestamp) as i64;
+                    debug!(
+                        "Pinged client {}, and found a time offset of {time_offset}ms",
+                        self.name
+                    );
                     return Ok(Some(PingResult { time_offset }));
                 }
                 Ok(Some(Message { .. })) => {
@@ -295,7 +294,7 @@ impl Connection {
     async fn close_silent(&mut self) {
         self.open = false;
         if let Err(err) = self.channel.close().await {
-            error!("Failed to close websocket: {err:?}");
+            error!("Failed to close websocket {}: {err:?}", self.name);
         }
     }
 }
@@ -307,7 +306,7 @@ impl Drop for Connection {
         }
         let close_future = self.close(CloseReason::ServerError, "Connection terminated");
         if let Err(err) = executor::block_on(close_future) {
-            error!("Failed to close connection in drop: {err:?}")
+            error!("Failed to close connection {} in drop: {err:?}", self.name)
         }
     }
 }
