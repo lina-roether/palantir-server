@@ -3,6 +3,9 @@ use std::sync::Arc;
 use api_access::{ApiAccessConfig, ApiAccessManager, ApiAccessPolicy};
 use config::Config;
 use connection::{CloseReason, ConnectionListener};
+use room::RoomManager;
+use session::Session;
+use tokio::sync;
 
 mod api_access;
 mod config;
@@ -29,16 +32,19 @@ async fn main() {
     });
 
     let access_mgr = Arc::new(ApiAccessManager::new(Arc::clone(&config)));
+    let room_mgr = Arc::new(sync::Mutex::new(RoomManager::new()));
 
     let listener = ConnectionListener::bind(Arc::clone(&config)).await.unwrap();
     listener
         .listen(move |mut conn| {
             let access_mgr = Arc::clone(&access_mgr);
+            let room_mgr = Arc::clone(&room_mgr);
             async move {
                 conn.init(&access_mgr).await.unwrap();
-                conn.close(CloseReason::RoomClosed, "Session closed")
-                    .await
-                    .unwrap();
+
+                let mut session = Session::new(conn, room_mgr);
+                session.run().await;
+
                 Ok(())
             }
         })

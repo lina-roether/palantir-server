@@ -1,9 +1,4 @@
-use std::{
-    error::Error,
-    pin::Pin,
-    task::{Context, Poll},
-    time::SystemTime,
-};
+use std::{error::Error, time::SystemTime};
 
 use anyhow::{anyhow, Context as _};
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
@@ -15,6 +10,7 @@ use crate::utils::timestamp;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConnectionLoginMsgBodyV1 {
+    pub username: String,
     pub api_key: Option<String>,
 }
 
@@ -56,7 +52,6 @@ pub struct RoomCreateMsgBodyV1 {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoomJoinMsgBodyV1 {
     pub id: Uuid,
-    pub name: String,
     pub password: String,
 }
 
@@ -99,7 +94,6 @@ pub enum RoomDisconnectedReasonV1 {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoomDisconnectedMsgBodyV1 {
     pub reason: RoomDisconnectedReasonV1,
-    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

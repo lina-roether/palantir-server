@@ -91,6 +91,7 @@ impl ConnectionListener {
 
 pub struct Connection {
     open: bool,
+    username: Option<String>,
     permissions: ApiPermissions,
     channel: MessageChannel<WebSocketStream<TcpStream>>,
 }
@@ -114,6 +115,7 @@ impl Connection {
     pub fn new(ws: WebSocketStream<TcpStream>) -> Self {
         Self {
             open: true,
+            username: None,
             permissions: ApiPermissions::default(),
             channel: MessageChannel::new(ws),
         }
@@ -121,6 +123,13 @@ impl Connection {
 
     pub fn is_open(&self) -> bool {
         self.open
+    }
+
+    pub fn username(&self) -> &str {
+        self.username
+            .as_ref()
+            .map(String::as_ref)
+            .unwrap_or("Not logged in")
     }
 
     pub fn permissions(&self) -> &ApiPermissions {
@@ -135,6 +144,7 @@ impl Connection {
                     body: MessageBody::ConnectionLoginV1(body),
                     ..
                 })) => {
+                    self.username = Some(body.username);
                     self.permissions = access_mgr.get_permissions(body.api_key.as_deref());
                     if !self.permissions.connect {
                         self.close(CloseReason::Unauthorized, "Unauthorized")

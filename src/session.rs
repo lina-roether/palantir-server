@@ -1,14 +1,16 @@
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context};
-use log::{error, warn};
+use log::{debug, error, warn};
 use tokio::sync::{self, mpsc};
 use uuid::Uuid;
 
 use crate::{
-    api_access::ApiPermissions,
-    connection::Connection,
-    messages::{Message, MessageBody, RoomDisconnectedMsgBodyV1, RoomDisconnectedReasonV1},
+    connection::{CloseReason, Connection},
+    messages::{
+        Message, MessageBody, RoomDisconnectedMsgBodyV1, RoomDisconnectedReasonV1,
+        RoomStateMsgBodyV1, RoomUserRoleV1, RoomUserV1,
+    },
     room::{self, RoomCloseReason, RoomHandle, RoomManager, RoomMsg, RoomState, UserRole},
 };
 
@@ -20,8 +22,7 @@ pub enum SessionMsg {
 
 pub struct Session {
     id: Uuid,
-    name: String,
-    api_permissions: ApiPermissions,
+    running: bool,
     room_manager: Arc<sync::Mutex<RoomManager>>,
     room: Option<RoomHandle>,
     message_tx: mpsc::Sender<SessionMsg>,
@@ -30,17 +31,11 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn new(
-        name: String,
-        connection: Connection,
-        api_permissions: ApiPermissions,
-        room_manager: Arc<sync::Mutex<RoomManager>>,
-    ) -> Self {
+    pub fn new(connection: Connection, room_manager: Arc<sync::Mutex<RoomManager>>) -> Self {
         let (message_tx, message_rx) = mpsc::channel::<SessionMsg>(32);
         Self {
             id: Uuid::new_v4(),
-            api_permissions,
-            name,
+            running: true,
             room: None,
             message_rx,
             message_tx,
@@ -50,11 +45,34 @@ impl Session {
     }
 
     pub async fn run(&mut self) {
-        todo!()
+        debug!("Starting session for user '{}'", self.connection.username());
+        while self.running {
+            tokio::select! {
+                client_msg = self.connection.recv() => {
+                    if let Some(msg) = client_msg {
+                        self.handle_client_msg(msg).await
+                    } else {
+                        // the connection was closed
+                        self.running = false;
+                    }
+                }
+                session_msg = self.message_rx.recv() => {
+                    if let Some(msg) = session_msg {
+                        self.handle_session_msg(msg).await
+                    } else {
+                        self.running = false;
+                        error!("The session message channel was unexpectedly closed!");
+                        if let Err(err) = self.connection.close(CloseReason::ServerError, "Your session crashed").await {
+                            error!("Failed to close connection: {err:?}");
+                        }
+                    }
+                }
+            }
+        }
     }
 
     async fn create_room(&mut self, name: String, password: String) -> anyhow::Result<()> {
-        if !self.api_permissions.host {
+        if !self.connection.permissions().host {
             return Err(anyhow!("Your account is not permitted to host rooms"));
         }
 
@@ -151,7 +169,6 @@ impl Session {
                 .send(Message::new(MessageBody::RoomDisconnectedV1(
                     RoomDisconnectedMsgBodyV1 {
                         reason: RoomDisconnectedReasonV1::ServerError,
-                        message: "The room crashed! sowwy ;-;".to_string(),
                     },
                 )))
                 .await
@@ -176,8 +193,54 @@ impl Session {
             _ => Ok(()),
         };
         if let Some(err) = result.err() {
-            error!("{err:?}");
+            error!("Failed to handle message: {err:?}");
             self.connection.send_error(err).await;
+        }
+    }
+
+    async fn send_room_state(&mut self, state: RoomState) -> anyhow::Result<()> {
+        self.connection
+            .send(Message::new(MessageBody::RoomStateV1(RoomStateMsgBodyV1 {
+                id: state.id,
+                name: state.name,
+                password: state.password,
+                users: state
+                    .users
+                    .iter()
+                    .map(|user| RoomUserV1 {
+                        id: user.id,
+                        name: user.name.clone(),
+                        role: match user.role {
+                            UserRole::Guest => RoomUserRoleV1::Guest,
+                            UserRole::Host => RoomUserRoleV1::Host,
+                        },
+                    })
+                    .collect(),
+            })))
+            .await
+    }
+
+    async fn room_closed(&mut self, reason: RoomCloseReason) -> anyhow::Result<()> {
+        self.room = None;
+        self.connection
+            .send(Message::new(MessageBody::RoomDisconnectedV1(
+                RoomDisconnectedMsgBodyV1 {
+                    reason: match reason {
+                        RoomCloseReason::ServerError => RoomDisconnectedReasonV1::ServerError,
+                        RoomCloseReason::ClosedByHost => RoomDisconnectedReasonV1::ClosedByHost,
+                    },
+                },
+            )))
+            .await
+    }
+
+    async fn handle_session_msg(&mut self, msg: SessionMsg) {
+        let result = match msg {
+            SessionMsg::RoomState(state) => self.send_room_state(state).await,
+            SessionMsg::RoomClosed(reason) => self.room_closed(reason).await,
+        };
+        if let Some(err) = result.err() {
+            error!("Failed to handle session message: {err:?}");
         }
     }
 
@@ -185,7 +248,7 @@ impl Session {
         room::SessionInfo {
             session_id: self.id,
             session_message_tx: self.message_tx.clone().downgrade(),
-            name: self.name.clone(),
+            name: self.connection.username().to_string(),
         }
     }
 }
