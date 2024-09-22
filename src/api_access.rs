@@ -12,7 +12,7 @@ pub struct ApiPermissions {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct ApiKey {
+pub struct ApiKey {
     key: String,
 
     #[serde(default = "ApiPermissions::connect", flatten)]

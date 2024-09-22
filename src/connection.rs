@@ -2,7 +2,7 @@ use std::{fmt::Display, sync::Arc, time::Duration};
 
 use anyhow::{anyhow, Context};
 use futures::executor;
-use futures_util::{Future, SinkExt, StreamExt};
+use futures_util::Future;
 use log::{debug, error, info};
 use serde::Deserialize;
 use tokio::{

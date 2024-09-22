@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use api_access::{ApiAccessConfig, ApiAccessManager, ApiAccessPolicy};
 use config::Config;
-use connection::{CloseReason, ConnectionListener};
+use connection::ConnectionListener;
 use room::RoomManager;
 use session::Session;
 use tokio::sync;

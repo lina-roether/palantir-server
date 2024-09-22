@@ -186,7 +186,8 @@ impl Room {
     }
 
     async fn broadcast_state(&mut self) {
-        self.broadcast_msg(SessionMsg::RoomState(self.get_state()));
+        self.broadcast_msg(SessionMsg::RoomState(self.get_state()))
+            .await;
     }
 
     async fn leave(&mut self, session_id: Uuid) {
@@ -218,7 +219,7 @@ impl Room {
 
     async fn close(&mut self, reason: RoomCloseReason) {
         self.running = false;
-        self.broadcast_msg(SessionMsg::RoomClosed(reason));
+        self.broadcast_msg(SessionMsg::RoomClosed(reason)).await;
     }
 
     async fn handle_cmd(&mut self, cmd: RoomCmd) {
@@ -290,9 +291,7 @@ impl RoomManager {
     }
 
     pub fn get_room_password(&self, id: Uuid) -> Option<String> {
-        let Some(controller) = self.room_controllers.get(&id) else {
-            return None;
-        };
+        let controller = self.room_controllers.get(&id)?;
         Some(controller.password.clone())
     }
 
