@@ -220,7 +220,7 @@ impl Connection {
                 }
                 Ok(msg) => return Some(msg),
                 Err(err) => {
-                    debug!(
+                    error!(
                         "Received malformed message from client {}: {err:?}",
                         self.name
                     );
