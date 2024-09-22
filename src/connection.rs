@@ -1,4 +1,4 @@
-use std::{default, fmt::Display, sync::Arc, time::Duration};
+use std::{fmt::Display, sync::Arc, time::Duration};
 
 use anyhow::{anyhow, Context};
 use futures::executor;
@@ -104,7 +104,7 @@ pub struct PingResult {
 pub enum CloseReason {
     ServerError,
     Unauthorized,
-    SessionClosed,
+    RoomClosed,
 }
 
 impl Connection {
@@ -184,7 +184,7 @@ impl Connection {
             return None;
         }
         loop {
-            let Some(msg_res) = self.channel.next().await else {
+            let Some(msg_res) = self.channel.recv().await else {
                 self.close_silent().await;
                 return None;
             };
@@ -271,7 +271,7 @@ impl Connection {
                 ConnectionClosedMsgBodyV1 {
                     reason: match reason {
                         CloseReason::ServerError => ConnectionClosedReasonV1::ServerError,
-                        CloseReason::SessionClosed => ConnectionClosedReasonV1::SessionClosed,
+                        CloseReason::RoomClosed => ConnectionClosedReasonV1::RoomClosed,
                         CloseReason::Unauthorized => ConnectionClosedReasonV1::Unauthorized,
                     },
                     message: message.to_string(),
