@@ -1,8 +1,11 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use anyhow::{anyhow, Context};
 use log::{debug, error, warn};
-use tokio::sync::{self, mpsc};
+use tokio::{
+    sync::{self, mpsc},
+    time,
+};
 use uuid::Uuid;
 
 use crate::{
@@ -28,9 +31,13 @@ pub struct Session {
     message_tx: mpsc::Sender<SessionMsg>,
     message_rx: mpsc::Receiver<SessionMsg>,
     connection: Connection,
+    ping_interval: time::Interval,
+    time_offset: i64,
 }
 
 impl Session {
+    const PING_INTERVAL: Duration = Duration::from_secs(5);
+
     pub fn new(connection: Connection, room_manager: Arc<sync::Mutex<RoomManager>>) -> Self {
         let (message_tx, message_rx) = mpsc::channel::<SessionMsg>(32);
         Self {
@@ -41,6 +48,8 @@ impl Session {
             message_tx,
             connection,
             room_manager,
+            time_offset: 0,
+            ping_interval: time::interval(Self::PING_INTERVAL),
         }
     }
 
@@ -66,9 +75,18 @@ impl Session {
                             error!("Failed to close connection: {err:?}");
                         }
                     }
-                }
+                },
+                _ = self.ping_interval.tick() => self.ping().await
             }
         }
+    }
+
+    async fn ping(&mut self) {
+        match self.connection.ping().await {
+            Ok(Some(result)) => self.time_offset = result.time_offset,
+            Ok(None) => (), // the connection was closed; this is handled separately
+            Err(err) => error!("Failed to ping client: {err:?}"),
+        };
     }
 
     async fn create_room(&mut self, name: String, password: String) -> anyhow::Result<()> {
