@@ -58,13 +58,6 @@ impl RoomController {
         self.message_tx.clone().downgrade()
     }
 
-    fn authenticate(&self, password: String) -> anyhow::Result<()> {
-        if password != self.password {
-            return Err(anyhow!("Incorrect password!"));
-        }
-        Ok(())
-    }
-
     async fn join(
         &mut self,
         role: UserRole,
