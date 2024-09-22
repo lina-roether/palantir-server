@@ -1,13 +1,14 @@
 use std::sync::Arc;
 
 use api_access::{ApiAccessConfig, ApiAccessManager, ApiAccessPolicy};
-use config::{read_config, Config};
+use config::Config;
 use connection::{CloseReason, ConnectionListener};
 
 mod api_access;
 mod config;
 mod connection;
 mod messages;
+mod room;
 mod session;
 mod utils;
 
@@ -35,7 +36,7 @@ async fn main() {
             let access_mgr = Arc::clone(&access_mgr);
             async move {
                 conn.init(&access_mgr).await.unwrap();
-                conn.close(CloseReason::SessionClosed, "Session closed")
+                conn.close(CloseReason::RoomClosed, "Session closed")
                     .await
                     .unwrap();
                 Ok(())
