@@ -26,8 +26,8 @@ pub enum ConnectionClosedReasonV1 {
     #[serde(rename = "server_error")]
     ServerError,
 
-    #[serde(rename = "session_closed")]
-    SessionClosed,
+    #[serde(rename = "room_closed")]
+    RoomClosed,
 
     #[serde(rename = "timeout")]
     Timeout,
@@ -48,20 +48,20 @@ pub struct ConnectionClientErrorMsgBodyV1 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionStartMsgBodyV1 {
+pub struct RoomCreateMsgBodyV1 {
     pub name: String,
     pub password: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionJoinMsgBodyV1 {
+pub struct RoomJoinMsgBodyV1 {
     pub id: Uuid,
     pub name: String,
     pub password: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum SessionUserRoleV1 {
+pub enum RoomUserRoleV1 {
     #[serde(rename = "host")]
     Host,
 
@@ -70,20 +70,20 @@ pub enum SessionUserRoleV1 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionUserV1 {
+pub struct RoomUserV1 {
     pub name: String,
-    pub role: SessionUserRoleV1,
+    pub role: RoomUserRoleV1,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionStateMsgBodyV1 {
+pub struct RoomStateMsgBodyV1 {
     pub id: Uuid,
     pub password: String,
-    pub users: Vec<SessionUserV1>,
+    pub users: Vec<RoomUserV1>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum SessionTerminateReasonV1 {
+pub enum RoomDisconnectedReasonV1 {
     #[serde(rename = "closed_by_host")]
     ClosedByHost,
 
@@ -95,8 +95,8 @@ pub enum SessionTerminateReasonV1 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionTerminatedMsgBodyV1 {
-    pub reason: SessionTerminateReasonV1,
+pub struct RoomDisconnectedMsgBodyV1 {
+    pub reason: RoomDisconnectedReasonV1,
     pub message: String,
 }
 
@@ -117,6 +117,7 @@ pub struct PlaybackSyncMsgBodyV1 {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "m")]
+#[non_exhaustive]
 pub enum MessageBody {
     #[serde(rename = "connection::login/v1")]
     ConnectionLoginV1(ConnectionLoginMsgBodyV1),
@@ -139,26 +140,35 @@ pub enum MessageBody {
     #[serde(rename = "connection::keepalive/v1")]
     ConnectionKeepaliveV1,
 
-    #[serde(rename = "session::start/v1")]
-    SessionStartV1(SessionStartMsgBodyV1),
+    #[serde(rename = "room::create/v1")]
+    RoomCreateV1(RoomCreateMsgBodyV1),
 
-    #[serde(rename = "session::stop/v1")]
-    SessionStopV1,
+    #[serde(rename = "room::create_ack/v1")]
+    RoomCreateAckV1,
 
-    #[serde(rename = "session::join/v1")]
-    SessionJoinV1(SessionJoinMsgBodyV1),
+    #[serde(rename = "room::close/v1")]
+    RoomCloseV1,
 
-    #[serde(rename = "session::leave/v1")]
-    SessionLeaveV1,
+    #[serde(rename = "room::close_ack/v1")]
+    RoomCloseAckV1,
 
-    #[serde(rename = "session::leave_ack/v1")]
-    SessionLeaveAckV1,
+    #[serde(rename = "room::join/v1")]
+    RoomJoinV1(RoomJoinMsgBodyV1),
 
-    #[serde(rename = "session::terminated/v1")]
-    SessionTerminatedV1(SessionTerminatedMsgBodyV1),
+    #[serde(rename = "room::join_ack/v1")]
+    RoomJoinAckV1,
 
-    #[serde(rename = "session::state/v1")]
-    SessionStateV1(SessionStateMsgBodyV1),
+    #[serde(rename = "room::leave/v1")]
+    RoomLeaveV1,
+
+    #[serde(rename = "room::leave_ack/v1")]
+    RoomLeaveAckV1,
+
+    #[serde(rename = "room::disconnected/v1")]
+    RoomDisconnectedV1(RoomDisconnectedMsgBodyV1),
+
+    #[serde(rename = "room::state/v1")]
+    RoomStateV1(RoomStateMsgBodyV1),
 
     #[serde(rename = "playback::select/v1")]
     PlaybackSelectV1(PlaybackSelectMsgBodyV1),
@@ -207,79 +217,56 @@ impl<S> MessageChannel<S> {
     }
 }
 
-impl<S> Sink<Message> for MessageChannel<S>
+impl<S> MessageChannel<S>
 where
     S: Sink<tungstenite::Message> + Unpin,
     S::Error: Error + Send + Sync + 'static,
 {
-    type Error = anyhow::Error;
-
-    fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.ws.poll_ready_unpin(cx).map_err(anyhow::Error::from)
-    }
-
-    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.ws.poll_flush_unpin(cx).map_err(anyhow::Error::from)
-    }
-
-    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.ws.poll_close_unpin(cx).map_err(anyhow::Error::from)
-    }
-
-    fn start_send(mut self: Pin<&mut Self>, item: Message) -> Result<(), Self::Error> {
-        let msg = match self.format {
+    pub async fn send(&mut self, message: Message) -> Result<(), anyhow::Error> {
+        let serialized_msg = match self.format {
             MessageFormat::Msgpack => tungstenite::Message::Binary(
-                rmp_serde::to_vec(&item).context("Failed to serialize message as MsgPack")?,
+                rmp_serde::to_vec(&message).context("Failed to serialize message as MsgPack")?,
             ),
             MessageFormat::Json => tungstenite::Message::Text(
-                serde_json::to_string(&item).context("Failed to serialize message as JSON")?,
+                serde_json::to_string(&message).context("Failed to serialize message as JSON")?,
             ),
         };
-        self.ws.start_send_unpin(msg)?;
+        self.ws
+            .send(serialized_msg)
+            .await
+            .map_err(anyhow::Error::from)
+    }
+
+    pub async fn close(&mut self) -> Result<(), anyhow::Error> {
+        self.ws.close().await?;
         Ok(())
     }
 }
 
-impl<S> Stream for MessageChannel<S>
+impl<S> MessageChannel<S>
 where
-    S: Sink<tungstenite::Message>
-        + Stream<Item = tungstenite::Result<tungstenite::Message>>
-        + Unpin,
-    S::Error: Error + Send + Sync,
+    S: Stream<Item = tungstenite::Result<tungstenite::Message>> + Unpin,
 {
-    type Item = anyhow::Result<Message>;
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.ws.size_hint()
-    }
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        self.ws.poll_next_unpin(cx).map(|msg| {
-            let Some(msg) = msg else {
-                return None;
-            };
-            let msg = match msg {
-                Ok(msg) => msg,
-                Err(err) => return Some(Err(err.into())),
-            };
-            let deserialized_res: anyhow::Result<Message> = match msg {
-                tungstenite::Message::Binary(data) => {
-                    self.format = MessageFormat::Msgpack;
-                    rmp_serde::from_slice(&data).map_err(|err| {
-                        anyhow!(err).context("Failed to deserialize binary message as MsgPack")
-                    })
-                }
-                tungstenite::Message::Text(data) => {
-                    self.format = MessageFormat::Json;
-                    serde_json::from_str(&data).map_err(|err| {
-                        anyhow!(err).context("Failed to deserialize text message as JSON")
-                    })
-                }
-                _ => {
-                    return Some(Err(anyhow!("Only binary and text messages are accepted.")));
-                }
-            };
-            Some(deserialized_res)
-        })
+    pub async fn recv(&mut self) -> Option<Result<Message, anyhow::Error>> {
+        let msg = match self.ws.next().await? {
+            Ok(msg) => msg,
+            Err(err) => return Some(Err(anyhow!(err))),
+        };
+        let deserialized_msg: anyhow::Result<Message> = match msg {
+            tungstenite::Message::Binary(data) => {
+                self.format = MessageFormat::Msgpack;
+                rmp_serde::from_slice(&data).map_err(|err| {
+                    anyhow!(err).context("Failed to deserialize binary message as MsgPack")
+                })
+            }
+            tungstenite::Message::Text(data) => {
+                self.format = MessageFormat::Json;
+                serde_json::from_str(&data).map_err(|err| {
+                    anyhow!(err).context("Failed to deserialize text message as JSON")
+                })
+            }
+            _ => return Some(Err(anyhow!("Only binary and text messages are accepted."))),
+        };
+        Some(deserialized_msg)
     }
 }
