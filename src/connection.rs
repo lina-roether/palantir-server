@@ -13,7 +13,6 @@ use tokio_tungstenite::WebSocketStream;
 
 use crate::{
     api_access::{ApiAccessManager, ApiPermissions},
-    config::Config,
     messages::{
         ConnectionClientErrorMsgBodyV1, ConnectionClosedMsgBodyV1, ConnectionClosedReasonV1,
         Message, MessageBody, MessageChannel,
@@ -40,14 +39,11 @@ pub struct ConnectionListener {
 }
 
 impl ConnectionListener {
-    pub async fn bind(config: Arc<Config>) -> anyhow::Result<Self> {
-        let listener = TcpListener::bind(&config.server.listen_on)
+    pub async fn bind(config: ServerConfig) -> anyhow::Result<Self> {
+        let listener = TcpListener::bind(&config.listen_on)
             .await
             .context("Failed to start TCP server")?;
-        Ok(Self {
-            listener,
-            config: config.server.clone(),
-        })
+        Ok(Self { listener, config })
     }
 
     pub async fn listen<F: Future<Output = anyhow::Result<()>> + Send>(

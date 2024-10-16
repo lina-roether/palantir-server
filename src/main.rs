@@ -20,7 +20,7 @@ async fn main() {
     pretty_env_logger::init();
 
     // let config = read_config(None);
-    let config = Arc::new(Config {
+    let config = Config {
         api_access: ApiAccessConfig {
             policy: ApiAccessPolicy {
                 restrict_connect: false,
@@ -29,12 +29,12 @@ async fn main() {
             ..Default::default()
         },
         ..Default::default()
-    });
+    };
 
-    let access_mgr = Arc::new(ApiAccessManager::new(Arc::clone(&config)));
+    let access_mgr = Arc::new(ApiAccessManager::new(config.api_access));
     let room_mgr = Arc::new(sync::Mutex::new(RoomManager::new()));
 
-    let listener = ConnectionListener::bind(Arc::clone(&config)).await.unwrap();
+    let listener = ConnectionListener::bind(config.server).await.unwrap();
     listener
         .listen(move |mut conn| {
             let access_mgr = Arc::clone(&access_mgr);

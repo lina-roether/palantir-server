@@ -3,7 +3,7 @@ use std::{error::Error, time::SystemTime};
 use anyhow::{anyhow, Context as _};
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use serde::{Deserialize, Serialize};
-use tokio_tungstenite::{tungstenite, WebSocketStream};
+use tokio_tungstenite::tungstenite;
 use uuid::Uuid;
 
 use crate::utils::timestamp;

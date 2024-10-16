@@ -1,8 +1,4 @@
-use std::sync::Arc;
-
 use serde::Deserialize;
-
-use crate::config::Config;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
@@ -79,33 +75,31 @@ pub struct ApiAccessConfig {
 }
 
 pub struct ApiAccessManager {
-    config: Arc<Config>,
+    config: ApiAccessConfig,
 }
 
 impl ApiAccessManager {
-    pub fn new(config: Arc<Config>) -> Self {
+    pub fn new(config: ApiAccessConfig) -> Self {
         Self { config }
     }
 
     pub fn get_permissions(&self, key: Option<&str>) -> ApiPermissions {
-        let config = &self.config.api_access;
-
         let default_perms = ApiPermissions {
-            connect: !config.policy.restrict_connect,
-            host: !config.policy.restrict_host,
+            connect: !self.config.policy.restrict_connect,
+            host: !self.config.policy.restrict_host,
         };
 
         let Some(key) = key else {
             return default_perms;
         };
 
-        let Some(key_config) = config.keys.iter().find(|k| k.key == key) else {
+        let Some(key_config) = self.config.keys.iter().find(|k| k.key == key) else {
             return default_perms;
         };
 
         ApiPermissions {
-            connect: !config.policy.restrict_connect || key_config.permissions.connect,
-            host: !config.policy.restrict_host || key_config.permissions.host,
+            connect: !self.config.policy.restrict_connect || key_config.permissions.connect,
+            host: !self.config.policy.restrict_host || key_config.permissions.host,
         }
     }
 }
