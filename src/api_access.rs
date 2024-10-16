@@ -7,12 +7,12 @@ pub struct ApiPermissions {
     pub host: bool,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct ApiKey {
-    key: String,
+    pub key: String,
 
     #[serde(default = "ApiPermissions::connect", flatten)]
-    permissions: ApiPermissions,
+    pub permissions: ApiPermissions,
 }
 
 impl Default for ApiPermissions {
@@ -51,7 +51,7 @@ impl ApiPermissions {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub struct ApiAccessPolicy {
     pub restrict_connect: bool,
@@ -67,11 +67,11 @@ impl Default for ApiAccessPolicy {
     }
 }
 
-#[derive(Debug, Deserialize, Default, Clone)]
+#[derive(Debug, Deserialize, PartialEq, Eq, Default, Clone)]
 #[serde(default)]
 pub struct ApiAccessConfig {
-    pub policy: ApiAccessPolicy,
-    pub keys: Vec<ApiKey>,
+    pub api_policy: ApiAccessPolicy,
+    pub api_keys: Vec<ApiKey>,
 }
 
 pub struct ApiAccessManager {
@@ -85,21 +85,21 @@ impl ApiAccessManager {
 
     pub fn get_permissions(&self, key: Option<&str>) -> ApiPermissions {
         let default_perms = ApiPermissions {
-            connect: !self.config.policy.restrict_connect,
-            host: !self.config.policy.restrict_host,
+            connect: !self.config.api_policy.restrict_connect,
+            host: !self.config.api_policy.restrict_host,
         };
 
         let Some(key) = key else {
             return default_perms;
         };
 
-        let Some(key_config) = self.config.keys.iter().find(|k| k.key == key) else {
+        let Some(key_config) = self.config.api_keys.iter().find(|k| k.key == key) else {
             return default_perms;
         };
 
         ApiPermissions {
-            connect: !self.config.policy.restrict_connect || key_config.permissions.connect,
-            host: !self.config.policy.restrict_host || key_config.permissions.host,
+            connect: !self.config.api_policy.restrict_connect || key_config.permissions.connect,
+            host: !self.config.api_policy.restrict_host || key_config.permissions.host,
         }
     }
 }
@@ -112,7 +112,7 @@ mod tests {
     fn should_fallback_to_policy_without_key() {
         // given
         let config = ApiAccessConfig {
-            policy: ApiAccessPolicy {
+            api_policy: ApiAccessPolicy {
                 restrict_connect: false,
                 restrict_host: true,
             },
@@ -131,11 +131,11 @@ mod tests {
     fn should_fallback_to_policy_with_invalid_key() {
         // given
         let config = ApiAccessConfig {
-            policy: ApiAccessPolicy {
+            api_policy: ApiAccessPolicy {
                 restrict_host: true,
                 restrict_connect: true,
             },
-            keys: vec![ApiKey {
+            api_keys: vec![ApiKey {
                 key: "AAAAA".to_string(),
                 permissions: ApiPermissions::all(),
             }],
@@ -153,11 +153,11 @@ mod tests {
     fn should_use_key_permissions_with_correct_key() {
         // given
         let config = ApiAccessConfig {
-            policy: ApiAccessPolicy {
+            api_policy: ApiAccessPolicy {
                 restrict_host: true,
                 restrict_connect: true,
             },
-            keys: vec![ApiKey {
+            api_keys: vec![ApiKey {
                 key: "AAAAA".to_string(),
                 permissions: ApiPermissions::all(),
             }],

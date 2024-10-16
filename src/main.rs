@@ -22,7 +22,7 @@ async fn main() {
     // let config = read_config(None);
     let config = Config {
         api_access: ApiAccessConfig {
-            policy: ApiAccessPolicy {
+            api_policy: ApiAccessPolicy {
                 restrict_connect: false,
                 ..Default::default()
             },

@@ -20,9 +20,9 @@ use crate::{
     utils::timestamp,
 };
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct ServerConfig {
-    listen_on: String,
+    pub listen_on: String,
 }
 
 impl Default for ServerConfig {
