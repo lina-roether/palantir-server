@@ -1,6 +1,6 @@
 use serde::Deserialize;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub struct ApiPermissions {
     pub connect: bool,
@@ -101,5 +101,73 @@ impl ApiAccessManager {
             connect: !self.config.policy.restrict_connect || key_config.permissions.connect,
             host: !self.config.policy.restrict_host || key_config.permissions.host,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn should_fallback_to_policy_without_key() {
+        // given
+        let config = ApiAccessConfig {
+            policy: ApiAccessPolicy {
+                restrict_connect: false,
+                restrict_host: true,
+            },
+            ..ApiAccessConfig::default()
+        };
+        let manager = ApiAccessManager::new(config);
+
+        // when
+        let permissions = manager.get_permissions(None);
+
+        // then
+        assert_eq!(permissions, ApiPermissions::connect())
+    }
+
+    #[test]
+    fn should_fallback_to_policy_with_invalid_key() {
+        // given
+        let config = ApiAccessConfig {
+            policy: ApiAccessPolicy {
+                restrict_host: true,
+                restrict_connect: true,
+            },
+            keys: vec![ApiKey {
+                key: "AAAAA".to_string(),
+                permissions: ApiPermissions::all(),
+            }],
+        };
+        let manager = ApiAccessManager::new(config);
+
+        // when
+        let permissions = manager.get_permissions(Some("BBBBB"));
+
+        // then
+        assert_eq!(permissions, ApiPermissions::none())
+    }
+
+    #[test]
+    fn should_use_key_permissions_with_correct_key() {
+        // given
+        let config = ApiAccessConfig {
+            policy: ApiAccessPolicy {
+                restrict_host: true,
+                restrict_connect: true,
+            },
+            keys: vec![ApiKey {
+                key: "AAAAA".to_string(),
+                permissions: ApiPermissions::all(),
+            }],
+        };
+        let manager = ApiAccessManager::new(config);
+
+        // when
+        let permissions = manager.get_permissions(Some("AAAAA"));
+
+        // then
+        assert_eq!(permissions, ApiPermissions::all());
     }
 }
