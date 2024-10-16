@@ -82,4 +82,16 @@ host = true
             }
         )
     }
+
+    #[test]
+    fn should_use_default_config_on_syntax_error() {
+        // given
+        let mut config_file = Cursor::new("listen_on = ");
+
+        // when
+        let config = read_config(&mut config_file);
+
+        // then
+        assert_eq!(config, Config::default())
+    }
 }
