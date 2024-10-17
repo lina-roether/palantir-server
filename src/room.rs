@@ -191,8 +191,18 @@ impl Room {
     }
 
     async fn leave(&mut self, session_id: Uuid) {
-        self.users.remove(&session_id);
-        self.broadcast_state().await;
+        let Some(user) = self.users.remove(&session_id) else {
+            return;
+        };
+        match user.role {
+            UserRole::Host => {
+                // Close the room if the host left
+                self.close(RoomCloseReason::ClosedByHost).await;
+            }
+            UserRole::Guest => {
+                self.broadcast_state().await;
+            }
+        }
     }
 
     async fn handle_msg(&mut self, msg: RoomMsg) {
