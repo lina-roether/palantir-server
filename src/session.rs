@@ -79,6 +79,9 @@ impl Session {
                 _ = self.ping_interval.tick() => self.ping().await
             }
         }
+        if let Err(error) = self.leave_room().await {
+            log::error!("Failed to leave room after session termination: {error:?}");
+        }
     }
 
     async fn ping(&mut self) {
