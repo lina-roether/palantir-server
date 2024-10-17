@@ -1,7 +1,10 @@
-use std::{borrow::Borrow, fs::File, io::Read, path::Path};
+use std::{
+    fs::File,
+    io::Read,
+    path::{Path, PathBuf},
+};
 
-use anyhow::{anyhow, Context};
-use log::error;
+use anyhow::Context;
 use serde::Deserialize;
 
 use crate::{api_access::ApiAccessConfig, app::Cli, connection::ServerConfig};
@@ -37,8 +40,20 @@ impl Config {
         let mut config = match &args.config {
             Some(config_path) => Self::read_path(config_path)?,
             None => {
-                log::warn!("No config file provided; using default config");
-                Config::default()
+                let default_config = PathBuf::from(DEFAULT_CONFIG_PATH);
+                if default_config.exists() {
+                    log::info!("Using default config file {DEFAULT_CONFIG_PATH}");
+                    Self::read_path(default_config)?
+                } else {
+                    log::warn!("No config file found; using default config");
+
+                    #[cfg(debug_assertions)]
+                    {
+                        log::warn!("DEBUG DEFAULT CONFIG IS INSECURE! You are running a debug build, which uses an insecure default configuration for development purposes.");
+                    }
+
+                    Config::default()
+                }
             }
         };
         if let Some(listen_on) = &args.listen_on {

@@ -1,3 +1,4 @@
+use log::debug;
 use serde::Deserialize;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -11,7 +12,7 @@ pub struct ApiPermissions {
 pub struct ApiKey {
     pub key: String,
 
-    #[serde(default = "ApiPermissions::connect", flatten)]
+    #[serde(default = "ApiPermissions::none", flatten)]
     pub permissions: ApiPermissions,
 }
 
@@ -59,10 +60,19 @@ pub struct ApiAccessPolicy {
 }
 
 impl Default for ApiAccessPolicy {
+    #[cfg(not(debug_assertions))]
     fn default() -> Self {
         Self {
             restrict_connect: true,
             restrict_host: true,
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    fn default() -> Self {
+        Self {
+            restrict_connect: false,
+            restrict_host: false,
         }
     }
 }
@@ -88,19 +98,24 @@ impl ApiAccessManager {
             connect: !self.config.api_policy.restrict_connect,
             host: !self.config.api_policy.restrict_host,
         };
+        debug!("Default permissions are {default_perms:?}");
 
         let Some(key) = key else {
+            debug!("No API key provided; Using default permissions");
             return default_perms;
         };
 
         let Some(key_config) = self.config.api_keys.iter().find(|k| k.key == key) else {
+            debug!("Invalid API key provided; Using default permissions");
             return default_perms;
         };
 
-        ApiPermissions {
+        let permissions = ApiPermissions {
             connect: !self.config.api_policy.restrict_connect || key_config.permissions.connect,
             host: !self.config.api_policy.restrict_host || key_config.permissions.host,
-        }
+        };
+        debug!("Valid API key provided; Permissions are {permissions:?}");
+        permissions
     }
 }
 

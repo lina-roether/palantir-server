@@ -177,6 +177,10 @@ impl Connection {
                 })) => {
                     self.username = Some(body.username);
                     self.permissions = access_mgr.get_permissions(body.api_key.as_deref());
+                    debug!(
+                        "Connection with {} has permissions {:?}",
+                        self.name, self.permissions
+                    );
                     if !self.permissions.connect {
                         self.close(CloseReason::Unauthorized, "Unauthorized")
                             .await
@@ -273,7 +277,7 @@ impl Connection {
                     let expected_timestamp = start_time + u64::abs_diff(start_time, end_time) / 2;
                     let time_offset =
                         u64::wrapping_sub(actual_timestamp, expected_timestamp) as i64;
-                    trace!(
+                    debug!(
                         "Pinged client {}, and found a time offset of {time_offset}ms",
                         self.name
                     );

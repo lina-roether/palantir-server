@@ -29,8 +29,8 @@ pub struct Cli {
 
 pub async fn start() -> anyhow::Result<()> {
     pretty_env_logger::formatted_builder()
-        .parse_env("PALANTIR_LOG")
         .filter_level(LevelFilter::Info)
+        .parse_env("PALANTIR_LOG")
         .init();
 
     let cli = Cli::parse();
@@ -45,7 +45,7 @@ pub async fn start() -> anyhow::Result<()> {
             let access_mgr = Arc::clone(&access_mgr);
             let room_mgr = Arc::clone(&room_mgr);
             async move {
-                conn.init(&access_mgr).await.unwrap();
+                conn.init(&access_mgr).await?;
 
                 let mut session = Session::new(conn, room_mgr);
                 session.run().await;
