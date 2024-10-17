@@ -1,9 +1,10 @@
-use std::io::Read;
+use std::{borrow::Borrow, fs::File, io::Read, path::Path};
 
+use anyhow::{anyhow, Context};
 use log::error;
 use serde::Deserialize;
 
-use crate::{api_access::ApiAccessConfig, connection::ServerConfig};
+use crate::{api_access::ApiAccessConfig, app::Cli, connection::ServerConfig};
 
 const DEFAULT_CONFIG_PATH: &str = "config.toml";
 
@@ -17,19 +18,33 @@ pub struct Config {
     pub server: ServerConfig,
 }
 
-pub fn read_config(file: &mut impl Read) -> Config {
-    let mut contents = String::new();
-    if let Err(err) = file.read_to_string(&mut contents) {
-        error!("Failed to read config: {err}. Reverting to default config.",);
-        return Config::default();
-    };
+impl Config {
+    pub fn read(file: &mut impl Read) -> anyhow::Result<Self> {
+        let mut contents = String::new();
+        file.read_to_string(&mut contents)
+            .context("Failed to read config file")?;
 
-    match toml::from_str(&contents) {
-        Ok(config) => config,
-        Err(err) => {
-            error!("Failed to parse config file: {err}. Reverting to default config.");
-            Config::default()
+        let config = toml::from_str(&contents).context("Failed to parse config file")?;
+        Ok(config)
+    }
+
+    pub fn read_path(path: impl AsRef<Path>) -> anyhow::Result<Self> {
+        let mut file = File::open(path).context("Failed to open config file")?;
+        Self::read(&mut file)
+    }
+
+    pub fn from_cli_args(args: &Cli) -> anyhow::Result<Self> {
+        let mut config = match &args.config {
+            Some(config_path) => Self::read_path(config_path)?,
+            None => {
+                log::warn!("No config file provided; using default config");
+                Config::default()
+            }
+        };
+        if let Some(listen_on) = &args.listen_on {
+            config.server.listen_on = listen_on.clone();
         }
+        Ok(config)
     }
 }
 
@@ -60,7 +75,7 @@ host = true
         let mut config_file = Cursor::new(TEST_CONFIG);
 
         // when
-        let config = read_config(&mut config_file);
+        let config = Config::read(&mut config_file).unwrap();
 
         // then
         assert_eq!(
@@ -84,14 +99,14 @@ host = true
     }
 
     #[test]
-    fn should_use_default_config_on_syntax_error() {
+    fn should_return_error_on_invalid_syntax() {
         // given
         let mut config_file = Cursor::new("listen_on = ");
 
         // when
-        let config = read_config(&mut config_file);
+        let result = Config::read(&mut config_file);
 
         // then
-        assert_eq!(config, Config::default())
+        assert!(result.is_err());
     }
 }

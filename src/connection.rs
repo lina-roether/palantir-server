@@ -1,4 +1,9 @@
-use std::{fmt::Display, sync::Arc, time::Duration};
+use std::{
+    fmt::Display,
+    net::{SocketAddr, ToSocketAddrs},
+    sync::Arc,
+    time::Duration,
+};
 
 use anyhow::{anyhow, Context};
 use futures::executor;
@@ -25,6 +30,24 @@ pub struct ServerConfig {
     pub listen_on: String,
 }
 
+impl ServerConfig {
+    fn get_socket_addrs(&self) -> anyhow::Result<Vec<SocketAddr>> {
+        if let Ok(addrs) = self.listen_on.to_socket_addrs() {
+            return Ok(addrs.collect());
+        }
+        if let Ok(port) = self.listen_on.parse::<u16>() {
+            let addrs = ("0.0.0.0", port)
+                .to_socket_addrs()
+                .context("Invalid port number")?;
+            return Ok(addrs.collect());
+        }
+        Err(anyhow!(
+            "Cannot listen on '{}': must be either a valid address or a port number",
+            self.listen_on
+        ))
+    }
+}
+
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
@@ -40,7 +63,8 @@ pub struct ConnectionListener {
 
 impl ConnectionListener {
     pub async fn bind(config: ServerConfig) -> anyhow::Result<Self> {
-        let listener = TcpListener::bind(&config.listen_on)
+        let addrs = config.get_socket_addrs()?;
+        let listener = TcpListener::bind(&*addrs)
             .await
             .context("Failed to start TCP server")?;
         Ok(Self { listener, config })
@@ -49,8 +73,12 @@ impl ConnectionListener {
     pub async fn listen<F: Future<Output = anyhow::Result<()>> + Send>(
         &self,
         handler: impl Fn(Connection) -> F + Send + Sync + 'static,
-    ) {
-        info!("Server listening on {}...", self.config.listen_on);
+    ) -> anyhow::Result<()> {
+        let local_addr = self
+            .listener
+            .local_addr()
+            .context("Failed to determine bound address")?;
+        info!("Server listening on {}...", local_addr);
 
         let handler = Arc::new(handler);
 
