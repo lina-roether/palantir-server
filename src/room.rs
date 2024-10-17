@@ -286,6 +286,10 @@ impl RoomManager {
         password: String,
         session_info: SessionInfo,
     ) -> anyhow::Result<RoomHandle> {
+        log::debug!(
+            "Creating room with name {name} for session {}...",
+            session_info.session_id
+        );
         let (id, mut controller) = Room::create(name, password);
         controller
             .join(UserRole::Host, session_info)
