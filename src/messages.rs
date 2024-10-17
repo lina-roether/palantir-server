@@ -8,13 +8,13 @@ use uuid::Uuid;
 
 use crate::utils::timestamp;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConnectionLoginMsgBodyV1 {
     pub username: String,
     pub api_key: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ConnectionClosedReasonV1 {
     #[serde(rename = "unauthorized")]
     Unauthorized,
@@ -32,30 +32,30 @@ pub enum ConnectionClosedReasonV1 {
     Unknown,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConnectionClosedMsgBodyV1 {
     pub reason: ConnectionClosedReasonV1,
     pub message: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConnectionClientErrorMsgBodyV1 {
     pub message: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RoomCreateMsgBodyV1 {
     pub name: String,
     pub password: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RoomJoinMsgBodyV1 {
     pub id: Uuid,
     pub password: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RoomUserRoleV1 {
     #[serde(rename = "host")]
     Host,
@@ -64,14 +64,14 @@ pub enum RoomUserRoleV1 {
     Guest,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RoomUserV1 {
     pub id: Uuid,
     pub name: String,
     pub role: RoomUserRoleV1,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RoomStateMsgBodyV1 {
     pub id: Uuid,
     pub name: String,
@@ -79,7 +79,7 @@ pub struct RoomStateMsgBodyV1 {
     pub users: Vec<RoomUserV1>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RoomDisconnectedReasonV1 {
     #[serde(rename = "closed_by_host")]
     ClosedByHost,
@@ -91,19 +91,19 @@ pub enum RoomDisconnectedReasonV1 {
     ServerError,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RoomDisconnectedMsgBodyV1 {
     pub reason: RoomDisconnectedReasonV1,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlaybackSelectMsgBodyV1 {
     pub page_href: String,
     pub frame_href: String,
     pub element_query: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlaybackSyncMsgBodyV1 {
     pub active_sync: bool,
     pub playing: bool,
@@ -111,7 +111,7 @@ pub struct PlaybackSyncMsgBodyV1 {
     pub timestamp: SystemTime,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "m")]
 #[non_exhaustive]
 pub enum MessageBody {
@@ -176,7 +176,7 @@ pub enum MessageBody {
     PlaybackSyncV1(PlaybackSyncMsgBodyV1),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Message {
     #[serde(rename = "t")]
     pub timestamp: u64,
@@ -187,10 +187,11 @@ pub struct Message {
 
 impl Message {
     pub fn new(body: MessageBody) -> Self {
-        Self {
-            timestamp: timestamp(),
-            body,
-        }
+        Self::new_with_timestamp(body, timestamp())
+    }
+
+    pub fn new_with_timestamp(body: MessageBody, timestamp: u64) -> Self {
+        Self { body, timestamp }
     }
 }
 
@@ -267,5 +268,85 @@ where
             _ => return Some(Err(anyhow!("Only binary and text messages are accepted."))),
         };
         Some(deserialized_msg)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use futures::stream;
+    use serde_json::json;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn should_send_message() {
+        // given
+        let mut messages = Vec::new();
+        let mut channel = MessageChannel::new(&mut messages);
+
+        // when
+        channel
+            .send(Message::new_with_timestamp(
+                MessageBody::ConnectionPingV1,
+                69420,
+            ))
+            .await
+            .unwrap();
+
+        // then
+        assert_eq!(messages.len(), 1);
+        let tungstenite::Message::Binary(data_recieved) = &messages[0] else {
+            panic!("Data received should be binary");
+        };
+        let obj_received: serde_json::Value = rmp_serde::from_slice(data_recieved).unwrap();
+
+        let obj_expected = json!({
+            "t": 69420,
+            "m": "connection::ping/v1",
+        });
+        assert_eq!(obj_received, obj_expected);
+    }
+
+    #[tokio::test]
+    async fn should_receive_message() {
+        // given
+        let messages = vec![tungstenite::Result::Ok(tungstenite::Message::binary(
+            rmp_serde::to_vec(&json!({
+                "t": 42069,
+                "m": "connection::pong/v1"
+            }))
+            .unwrap(),
+        ))];
+        let mut channel = MessageChannel::new(stream::iter(messages));
+
+        // when
+        let msg = channel.recv().await.unwrap().unwrap();
+
+        // then
+        assert_eq!(
+            msg,
+            Message::new_with_timestamp(MessageBody::ConnectionPongV1, 42069)
+        );
+        assert!(channel.recv().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn should_handle_malformed_messages() {
+        // given
+        let messages = vec![tungstenite::Result::Ok(tungstenite::Message::binary(
+            rmp_serde::to_vec(&json!({
+                "t": 42069,
+                "m": "AcddafsdfSfFdasdsadDDFSFÖDSFD"
+            }))
+            .unwrap(),
+        ))];
+        let mut channel = MessageChannel::new(stream::iter(messages));
+
+        // when
+        let result = channel.recv().await.unwrap();
+
+        // then
+        assert!(result.is_err());
+        assert!(channel.recv().await.is_none());
     }
 }
