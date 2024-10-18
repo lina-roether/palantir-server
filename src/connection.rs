@@ -1,4 +1,5 @@
 use std::{
+    collections::VecDeque,
     fmt::Display,
     net::{SocketAddr, ToSocketAddrs},
     sync::Arc,
@@ -12,6 +13,7 @@ use log::{debug, error, info, trace};
 use serde::Deserialize;
 use tokio::{
     net::{TcpListener, TcpStream},
+    sync::mpsc,
     time::timeout,
 };
 use tokio_tungstenite::WebSocketStream;
@@ -122,6 +124,7 @@ pub struct Connection {
     username: Option<String>,
     permissions: ApiPermissions,
     channel: MessageChannel<WebSocketStream<TcpStream>>,
+    interrupted_message_buffer: VecDeque<Message>,
 }
 
 #[derive(Debug, Clone)]
@@ -138,7 +141,7 @@ pub enum CloseReason {
 
 impl Connection {
     const LOGIN_TIMEOUT: Duration = Duration::from_secs(3);
-    const PING_TIMEOUT: Duration = Duration::from_secs(1);
+    const PING_TIMEOUT: Duration = Duration::from_secs(5);
 
     pub fn new(name: String, ws: WebSocketStream<TcpStream>) -> Self {
         debug!("Creating connection {name}");
@@ -148,6 +151,7 @@ impl Connection {
             username: None,
             permissions: ApiPermissions::default(),
             channel: MessageChannel::new(ws),
+            interrupted_message_buffer: VecDeque::new(),
         }
     }
 
@@ -169,7 +173,7 @@ impl Connection {
     pub async fn init(&mut self, access_mgr: &ApiAccessManager) -> anyhow::Result<()> {
         debug!("Waiting for login message on connection {}...", self.name);
         'wait_for_login: loop {
-            match timeout(Self::LOGIN_TIMEOUT, self.recv()).await {
+            match timeout(Self::LOGIN_TIMEOUT, self.raw_recv()).await {
                 Ok(None) => return Err(anyhow!("Connection closed before logging in")),
                 Ok(Some(Message {
                     body: MessageBody::ConnectionLoginV1(body),
@@ -222,7 +226,7 @@ impl Connection {
             .await;
     }
 
-    pub async fn recv(&mut self) -> Option<Message> {
+    async fn raw_recv(&mut self) -> Option<Message> {
         if !self.open {
             return None;
         }
@@ -232,23 +236,9 @@ impl Connection {
                 return None;
             };
             match msg_res {
-                Ok(Message {
-                    body: MessageBody::ConnectionPingV1,
-                    ..
-                }) => {
-                    if let Err(err) = self.send(Message::new(MessageBody::ConnectionPongV1)).await {
-                        error!("Failed to send pong to client {}: {err:?}", self.name);
-                    }
-                }
-                Ok(Message {
-                    body: MessageBody::ConnectionKeepaliveV1,
-                    ..
-                }) => {
-                    // do nothing
-                }
                 Ok(msg) => return Some(msg),
                 Err(err) => {
-                    error!(
+                    log::debug!(
                         "Received malformed message from client {}: {err:?}",
                         self.name
                     );
@@ -258,39 +248,89 @@ impl Connection {
         }
     }
 
-    pub async fn ping(&mut self) -> anyhow::Result<Option<PingResult>> {
-        let start_time = timestamp();
-        self.send(Message {
-            timestamp: start_time,
-            body: MessageBody::ConnectionPingV1,
-        })
-        .await?;
+    fn forward_message_from_interrupt(&mut self, message: Message) {
+        self.interrupted_message_buffer.push_back(message);
+    }
 
+    pub async fn recv(&mut self) -> Option<Message> {
         loop {
-            match timeout(Self::PING_TIMEOUT, self.recv()).await {
-                Ok(None) => return Ok(None),
-                Ok(Some(Message {
-                    timestamp: actual_timestamp,
-                    body: MessageBody::ConnectionPongV1,
-                })) => {
-                    let end_time = timestamp();
-                    let expected_timestamp = start_time + u64::abs_diff(start_time, end_time) / 2;
-                    let time_offset =
-                        u64::wrapping_sub(actual_timestamp, expected_timestamp) as i64;
-                    debug!(
-                        "Pinged client {}, and found a time offset of {time_offset}ms",
-                        self.name
-                    );
-                    return Ok(Some(PingResult { time_offset }));
+            if let Some(interrupted) = self.interrupted_message_buffer.pop_front() {
+                return Some(interrupted);
+            }
+            match self.raw_recv().await? {
+                Message {
+                    body: MessageBody::ConnectionPingV1,
+                    ..
+                } => {
+                    if let Err(err) = self.send(Message::new(MessageBody::ConnectionPongV1)).await {
+                        error!("Failed to send pong to client {}: {err:?}", self.name);
+                    }
                 }
-                Ok(Some(Message { .. })) => {
-                    self.send_error("Expected pong message").await;
+                Message {
+                    body: MessageBody::ConnectionKeepaliveV1,
+                    ..
+                } => {
+                    // do nothing
                 }
-                Err(timeout_err) => {
-                    let err = anyhow!(timeout_err).context("Pong message not received in time!");
-                    self.send_error(&err).await;
-                    return Err(err);
+                Message {
+                    body:
+                        MessageBody::ConnectionLoginAckV1
+                        | MessageBody::ConnectionPongV1
+                        | MessageBody::ConnectionLoginV1(..)
+                        | MessageBody::ConnectionClosedV1(..)
+                        | MessageBody::ConnectionClientErrorV1(..),
+                    ..
+                } => {
+                    log::debug!("Received unexpected message from client {}", self.name);
+                    continue;
                 }
+                msg => return Some(msg),
+            }
+        }
+    }
+
+    async fn start_interrupt<T>(&mut self, mapper: impl Fn(&Message) -> Option<T>) -> Option<T> {
+        loop {
+            match self.raw_recv().await {
+                None => return None,
+                Some(message) => {
+                    if let Some(value) = mapper(&message) {
+                        return Some(value);
+                    }
+                    self.forward_message_from_interrupt(message);
+                }
+            }
+        }
+    }
+
+    pub async fn ping(&mut self) -> anyhow::Result<Option<PingResult>> {
+        let ping = Message::new(MessageBody::ConnectionPingV1);
+        let start_time = ping.timestamp;
+        self.send(ping).await?;
+
+        let pong_result = timeout(
+            Self::PING_TIMEOUT,
+            self.start_interrupt(|msg| {
+                matches!(msg.body, MessageBody::ConnectionPongV1).then_some(msg.timestamp)
+            }),
+        )
+        .await;
+
+        match pong_result {
+            Ok(None) => Ok(None),
+            Ok(Some(actual_timestamp)) => {
+                let end_time = timestamp();
+                let expected_timestamp = start_time + u64::abs_diff(start_time, end_time) / 2;
+                let time_offset = u64::wrapping_sub(actual_timestamp, expected_timestamp) as i64;
+                debug!(
+                    "Pinged client {}, and found a time offset of {time_offset}ms",
+                    self.name
+                );
+                Ok(Some(PingResult { time_offset }))
+            }
+            Err(timeout_err) => {
+                let err = anyhow!(timeout_err).context("Pong message not received in time!");
+                Err(err)
             }
         }
     }
