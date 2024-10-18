@@ -164,8 +164,7 @@ impl Room {
             return Ok(());
         };
         let Some(message_tx) = user.message_tx.upgrade() else {
-            self.users.remove(&id);
-            Box::pin(self.broadcast_state()).await;
+            Box::pin(self.leave(id)).await;
             return Ok(());
         };
         message_tx.send(msg).await?;
@@ -194,6 +193,11 @@ impl Room {
         let Some(user) = self.users.remove(&session_id) else {
             return;
         };
+        if self.users.is_empty() {
+            // Close the room if it has no users
+            self.close(RoomCloseReason::ClosedByHost).await;
+            return;
+        }
         match user.role {
             UserRole::Host => {
                 // Close the room if the host left
@@ -228,6 +232,7 @@ impl Room {
     }
 
     async fn close(&mut self, reason: RoomCloseReason) {
+        log::debug!("Closing room {} ('{}'): {reason:?}", self.id, self.name);
         self.running = false;
         self.broadcast_msg(SessionMsg::RoomClosed(reason)).await;
     }
