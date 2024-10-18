@@ -223,6 +223,7 @@ where
     S::Error: Error + Send + Sync + 'static,
 {
     pub async fn send(&mut self, message: Message) -> Result<(), anyhow::Error> {
+        log::debug!("Sending message {message:?}");
         let serialized_msg = match self.format {
             MessageFormat::Msgpack => tungstenite::Message::Binary(
                 rmp_serde::to_vec(&message).context("Failed to serialize message as MsgPack")?,
@@ -265,8 +266,13 @@ where
                     anyhow!(err).context("Failed to deserialize text message as JSON")
                 })
             }
+            tungstenite::Message::Close(frame) => {
+                log::debug!("Received close frame: {frame:?}");
+                return None;
+            }
             _ => return Some(Err(anyhow!("Only binary and text messages are accepted."))),
         };
+        log::debug!("Received message {deserialized_msg:?}");
         Some(deserialized_msg)
     }
 }

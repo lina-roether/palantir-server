@@ -88,11 +88,15 @@ impl Session {
         match self.connection.ping().await {
             Ok(Some(result)) => self.time_offset = result.time_offset,
             Ok(None) => (), // the connection was closed; this is handled separately
-            Err(err) => error!("Failed to ping client: {err:?}"),
+            Err(err) => log::debug!("Failed to ping client: {err:?}"),
         };
     }
 
     async fn create_room(&mut self, name: String, password: String) -> anyhow::Result<()> {
+        log::debug!(
+            "Session {} requested to create a room named '{name}'",
+            self.id
+        );
         if !self.connection.permissions().host {
             return Err(anyhow!("Your account is not permitted to host rooms"));
         }
@@ -118,6 +122,7 @@ impl Session {
     }
 
     async fn close_room(&mut self) -> anyhow::Result<()> {
+        log::debug!("Session {} requested to close its room", self.id);
         let Some(room_handle) = &self.room else {
             return Ok(());
         };
@@ -142,6 +147,7 @@ impl Session {
     }
 
     async fn join_room(&mut self, room_id: Uuid, password: String) -> anyhow::Result<()> {
+        log::debug!("Session {} requested to join room {room_id}", self.id);
         self.leave_room()
             .await
             .context("Failed to leave current room before joining a new one")?;
@@ -170,12 +176,16 @@ impl Session {
     }
 
     async fn leave_room(&mut self) -> anyhow::Result<()> {
+        log::debug!("Session {} requested to leave its room", self.id);
         self.send_room_msg(RoomMsg::Leave(self.id)).await?;
         self.room = None;
-        self.connection
+        let result = self
+            .connection
             .send(Message::new(MessageBody::RoomLeaveAckV1))
-            .await
-            .context("Failed to send ACK message")?;
+            .await;
+        if let Err(err) = result {
+            log::debug!("Failed to send room leave ACK; assuming the connection is closed: {err:?}")
+        }
         Ok(())
     }
 
