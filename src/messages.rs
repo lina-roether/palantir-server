@@ -1,6 +1,6 @@
-use std::{error::Error, time::SystemTime};
+use std::{error::Error, io::Cursor, time::SystemTime};
 
-use anyhow::{anyhow, Context as _};
+use anyhow::{anyhow, Context};
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio_tungstenite::tungstenite;
@@ -217,6 +217,26 @@ impl<S> MessageChannel<S> {
     }
 }
 
+fn serialize_msgpack(message: Message) -> anyhow::Result<tungstenite::Message> {
+    let mut writer = Cursor::new(Vec::new());
+    // we represent structs as maps to get compatibility with the JS frontend that has no
+    // sophisticated data schema mechanism during deserialization
+    let mut serializer = rmp_serde::Serializer::new(&mut writer).with_struct_map();
+
+    message
+        .serialize(&mut serializer)
+        .context("Failed to serialize message as MsgPack")?;
+
+    let tungstenite_message = tungstenite::Message::binary(writer.into_inner());
+    Ok(tungstenite_message)
+}
+
+fn serialize_json(message: Message) -> anyhow::Result<tungstenite::Message> {
+    let json = serde_json::to_string(&message).context("Failed to serialize message as JSON")?;
+    let tungstenite_message = tungstenite::Message::text(json);
+    Ok(tungstenite_message)
+}
+
 impl<S> MessageChannel<S>
 where
     S: Sink<tungstenite::Message> + Unpin,
@@ -225,13 +245,10 @@ where
     pub async fn send(&mut self, message: Message) -> Result<(), anyhow::Error> {
         log::debug!("Sending message {message:?}");
         let serialized_msg = match self.format {
-            MessageFormat::Msgpack => tungstenite::Message::Binary(
-                rmp_serde::to_vec(&message).context("Failed to serialize message as MsgPack")?,
-            ),
-            MessageFormat::Json => tungstenite::Message::Text(
-                serde_json::to_string(&message).context("Failed to serialize message as JSON")?,
-            ),
+            MessageFormat::Msgpack => serialize_msgpack(message)?,
+            MessageFormat::Json => serialize_json(message)?,
         };
+
         self.ws
             .send(serialized_msg)
             .await
