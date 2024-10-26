@@ -176,6 +176,10 @@ impl Session {
     }
 
     async fn leave_room(&mut self) -> anyhow::Result<()> {
+        if self.room.is_none() {
+            return Ok(());
+        }
+
         log::debug!("Session {} requested to leave its room", self.id);
         self.send_room_msg(RoomMsg::Leave(self.id)).await?;
         self.room = None;
