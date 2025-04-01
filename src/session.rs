@@ -12,9 +12,9 @@ use crate::{
     connection::{CloseReason, Connection},
     messages::{
         Message, MessageBody, RoomDisconnectedMsgBodyV1, RoomDisconnectedReasonV1,
-        RoomStateMsgBodyV1, RoomUserRoleV1, RoomUserV1,
+        RoomStateMsgBodyV1, RoomUserPermissionsV1, RoomUserV1,
     },
-    room::{self, RoomCloseReason, RoomHandle, RoomManager, RoomMsg, RoomState, UserRole},
+    room::{self, RoomCloseReason, RoomHandle, RoomManager, RoomMsg, RoomState},
 };
 
 #[derive(Debug, Clone)]
@@ -127,7 +127,7 @@ impl Session {
             return Ok(());
         };
 
-        if room_handle.role != UserRole::Host {
+        if !room_handle.permissions.can_close {
             return Err(anyhow!("Not authorized to close the room"));
         }
 
@@ -245,9 +245,9 @@ impl Session {
                     .map(|user| RoomUserV1 {
                         id: user.id,
                         name: user.name.clone(),
-                        role: match user.role {
-                            UserRole::Guest => RoomUserRoleV1::Guest,
-                            UserRole::Host => RoomUserRoleV1::Host,
+                        permissions: RoomUserPermissionsV1 {
+                            can_share: user.permissions.can_share,
+                            can_close: user.permissions.can_close,
                         },
                     })
                     .collect(),

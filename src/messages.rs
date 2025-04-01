@@ -56,19 +56,16 @@ pub struct RoomJoinMsgBodyV1 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum RoomUserRoleV1 {
-    #[serde(rename = "host")]
-    Host,
-
-    #[serde(rename = "guest")]
-    Guest,
+pub struct RoomUserPermissionsV1 {
+    pub can_share: bool,
+    pub can_close: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RoomUserV1 {
     pub id: Uuid,
     pub name: String,
-    pub role: RoomUserRoleV1,
+    pub permissions: RoomUserPermissionsV1,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
