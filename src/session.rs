@@ -12,9 +12,9 @@ use crate::{
     connection::{CloseReason, Connection},
     messages::{
         Message, MessageBody, RoomDisconnectedMsgBodyV1, RoomDisconnectedReasonV1,
-        RoomStateMsgBodyV1, RoomUserPermissionsV1, RoomUserV1,
+        RoomPermissionsMsgBodyV1, RoomStateMsgBodyV1, RoomUserV1,
     },
-    room::{self, RoomCloseReason, RoomHandle, RoomManager, RoomMsg, RoomState},
+    room::{self, RoomCloseReason, RoomHandle, RoomManager, RoomMsg, RoomState, UserRole},
 };
 
 #[derive(Debug, Clone)]
@@ -127,7 +127,7 @@ impl Session {
             return Ok(());
         };
 
-        if !room_handle.permissions.can_close {
+        if !room_handle.role.permissions().can_close {
             return Err(anyhow!("Not authorized to close the room"));
         }
 
@@ -180,7 +180,7 @@ impl Session {
             return Ok(());
         }
 
-        log::debug!("Session {} requested to leave its room", self.id);
+        log::debug!("Session {} requested to kick its room", self.id);
         self.send_room_msg(RoomMsg::Leave(self.id)).await?;
         self.room = None;
         let result = self
@@ -193,9 +193,57 @@ impl Session {
         Ok(())
     }
 
+    async fn kick(&mut self, session_id: Uuid) -> anyhow::Result<()> {
+        let Some(room) = &self.room else {
+            return Ok(());
+        };
+
+        if !room.role.permissions().can_kick {
+            return Err(anyhow!("Not authorized to kick users"));
+        }
+
+        log::debug!("Session {} requested to kick {}", self.id, session_id);
+        self.send_room_msg(RoomMsg::Leave(session_id)).await?;
+        Ok(())
+    }
+
+    async fn set_user_role(&mut self, session_id: Uuid, role: UserRole) -> anyhow::Result<()> {
+        let Some(room) = &self.room else {
+            return Ok(());
+        };
+
+        if !room.role.permissions().can_set_roles {
+            return Err(anyhow!("Not authorized to set user roles"));
+        }
+
+        log::debug!("Session {} requested to set role for {} to {:?}", self.id, session_id, role);
+        self.send_room_msg(RoomMsg::SetRole(session_id, role)).await?;
+        Ok(())
+    }
+
+    async fn send_room_permissions(&mut self) -> anyhow::Result<()> {
+        let Some(room) = &self.room else {
+            return Err(anyhow!("Not currently in a room"));
+        };
+
+        log::debug!(
+            "Session {} requested its permissions; the user role is {:?}",
+            self.id,
+            room.role
+        );
+        self.connection
+            .send(Message::new(MessageBody::RoomPermissionsV1(
+                RoomPermissionsMsgBodyV1 {
+                    role: room.role.into(),
+                    permissions: room.role.permissions().into(),
+                },
+            )))
+            .await
+    }
+
     async fn send_room_msg(&mut self, msg: RoomMsg) -> anyhow::Result<()> {
         let Some(room_handle) = &self.room else {
-            return Ok(());
+            return Err(anyhow!("Not currently in a room"));
         };
         let Some(message_tx) = room_handle.message_tx.upgrade() else {
             warn!("Room {} was unexpectedly closed", room_handle.id);
@@ -225,6 +273,8 @@ impl Session {
             MessageBody::RoomJoinV1(body) => self.join_room(body.id, body.password).await,
             MessageBody::RoomLeaveV1 => self.leave_room().await,
             MessageBody::RoomRequestStateV1 => self.request_state().await,
+            MessageBody::RoomRequestPermissionsV1 => self.send_room_permissions().await,
+            MessageBody::RoomSetUserRole(body) => self.
             _ => Ok(()),
         };
         if let Some(err) = result.err() {
@@ -245,10 +295,7 @@ impl Session {
                     .map(|user| RoomUserV1 {
                         id: user.id,
                         name: user.name.clone(),
-                        permissions: RoomUserPermissionsV1 {
-                            can_share: user.permissions.can_share,
-                            can_close: user.permissions.can_close,
-                        },
+                        role: user.role.into(),
                     })
                     .collect(),
             })))

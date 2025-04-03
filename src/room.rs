@@ -8,40 +8,91 @@ use tokio::{
 };
 use uuid::Uuid;
 
-use crate::session::SessionMsg;
+use crate::{
+    messages::{RoomUserPermissionsV1, RoomUserRoleV1},
+    session::SessionMsg,
+};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UserRole {
+    Host,
+    Guest,
+    Spectator,
+}
+
+impl UserRole {
+    pub fn permissions(self) -> UserPermissions {
+        UserPermissions::from(self)
+    }
+}
+
+impl From<RoomUserRoleV1> for UserRole {
+    fn from(value: RoomUserRoleV1) -> Self {
+        match value {
+            RoomUserRoleV1::Host => UserRole::Host,
+            RoomUserRoleV1::Guest => UserRole::Guest,
+            RoomUserRoleV1::Spectator => UserRole::Spectator,
+        }
+    }
+}
+
+impl From<UserRole> for RoomUserRoleV1 {
+    fn from(value: UserRole) -> Self {
+        match value {
+            UserRole::Host => RoomUserRoleV1::Host,
+            UserRole::Guest => RoomUserRoleV1::Guest,
+            UserRole::Spectator => RoomUserRoleV1::Spectator,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UserPermissions {
     pub can_share: bool,
+    pub can_set_roles: bool,
+    pub can_kick: bool,
     pub can_close: bool,
 }
 
-impl UserPermissions {
-    pub fn host() -> Self {
-        Self {
-            can_share: true,
-            can_close: true,
+impl From<UserRole> for UserPermissions {
+    fn from(value: UserRole) -> Self {
+        match value {
+            UserRole::Host => Self {
+                can_share: true,
+                can_set_roles: true,
+                can_kick: true,
+                can_close: true,
+            },
+            UserRole::Guest => Self {
+                can_share: true,
+                can_set_roles: false,
+                can_kick: false,
+                can_close: false,
+            },
+            UserRole::Spectator => Self {
+                can_share: false,
+                can_set_roles: false,
+                can_kick: false,
+                can_close: false,
+            },
         }
     }
+}
 
-    pub fn trusted() -> Self {
+impl From<UserPermissions> for RoomUserPermissionsV1 {
+    fn from(value: UserPermissions) -> Self {
         Self {
-            can_share: true,
-            can_close: false,
-        }
-    }
-
-    pub fn spectator() -> Self {
-        Self {
-            can_share: false,
-            can_close: false,
+            can_close: value.can_close,
+            can_share: value.can_share,
+            can_set_roles: value.can_set_roles,
+            can_kick: value.can_kick,
         }
     }
 }
 
 impl Default for UserPermissions {
     fn default() -> Self {
-        Self::spectator()
+        Self::from(UserRole::Spectator)
     }
 }
 
@@ -60,20 +111,21 @@ pub enum RoomCloseReason {
 
 #[derive(Debug)]
 enum RoomCmd {
-    Join(UserPermissions, SessionInfo),
+    Join(UserRole, SessionInfo),
     Close(RoomCloseReason),
 }
 
 #[derive(Debug, Clone)]
 struct User {
     name: String,
-    permissions: UserPermissions,
+    role: UserRole,
     message_tx: mpsc::WeakSender<SessionMsg>,
 }
 
 #[derive(Debug, Clone)]
 pub enum RoomMsg {
     RequestState,
+    SetRole(Uuid, UserRole),
     Leave(Uuid),
 }
 
@@ -92,12 +144,10 @@ impl RoomController {
 
     async fn join(
         &mut self,
-        permissions: UserPermissions,
+        role: UserRole,
         info: SessionInfo,
     ) -> anyhow::Result<mpsc::WeakSender<RoomMsg>> {
-        self.command_tx
-            .send(RoomCmd::Join(permissions, info))
-            .await?;
+        self.command_tx.send(RoomCmd::Join(role, info)).await?;
         Ok(self.message_sender())
     }
 
@@ -110,7 +160,7 @@ impl RoomController {
 
 pub struct RoomHandle {
     pub id: Uuid,
-    pub permissions: UserPermissions,
+    pub role: UserRole,
     pub message_tx: mpsc::WeakSender<RoomMsg>,
 }
 
@@ -118,7 +168,7 @@ pub struct RoomHandle {
 pub struct UserData {
     pub id: Uuid,
     pub name: String,
-    pub permissions: UserPermissions,
+    pub role: UserRole,
 }
 
 #[derive(Debug, Clone)]
@@ -168,7 +218,7 @@ impl Room {
                 .map(|(id, user)| UserData {
                     id: *id,
                     name: user.name.clone(),
-                    permissions: user.permissions.clone(),
+                    role: user.role,
                 })
                 .collect(),
         }
@@ -230,21 +280,37 @@ impl Room {
             self.close(RoomCloseReason::ClosedByHost).await;
             return;
         }
+        if self
+            .users
+            .iter()
+            .all(|(_, user)| user.role != UserRole::Host)
+        {
+            // TODO
+        }
         self.broadcast_state().await;
     }
 
-    async fn handle_msg(&mut self, msg: RoomMsg) {
-        match msg {
-            RoomMsg::RequestState => self.broadcast_state().await,
-            RoomMsg::Leave(session_id) => self.leave(session_id).await,
+    fn choose_new_host_id(&mut self) -> Option<Uuid> {
+        let mut new_host_id: Option<Uuid> = None;
+        for (id, user) in &self.users {
+            if matches!(user.role, UserRole::Host | UserRole::Guest) {
+                return Some(*id);
+            }
+            new_host_id.get_or_insert(*id);
         }
+        new_host_id
     }
 
-    async fn join(
-        &mut self,
-        permissions: UserPermissions,
-        session_info: SessionInfo,
-    ) -> anyhow::Result<()> {
+    async fn handle_msg(&mut self, msg: RoomMsg) -> anyhow::Result<()> {
+        match msg {
+            RoomMsg::RequestState => self.broadcast_state().await,
+            RoomMsg::SetRole(session_id, role) => self.set_role(role, session_id).await?,
+            RoomMsg::Leave(session_id) => self.leave(session_id).await,
+        }
+        Ok(())
+    }
+
+    async fn join(&mut self, role: UserRole, session_info: SessionInfo) -> anyhow::Result<()> {
         if self.users.contains_key(&session_info.session_id) {
             return Err(anyhow!("Already joined this room"));
         }
@@ -252,10 +318,20 @@ impl Room {
             session_info.session_id,
             User {
                 name: session_info.name,
-                permissions,
+                role,
                 message_tx: session_info.session_message_tx,
             },
         );
+        self.broadcast_state().await;
+        Ok(())
+    }
+
+    async fn set_role(&mut self, role: UserRole, session_id: Uuid) -> anyhow::Result<()> {
+        let Some(user) = self.users.get_mut(&session_id) else {
+            return Err(anyhow!("User doesn't exist"));
+        };
+        user.role = role;
+        self.broadcast_state().await;
         Ok(())
     }
 
@@ -323,18 +399,18 @@ impl RoomManager {
             "Creating room with name {name} for session {}...",
             session_info.session_id
         );
-        let permissions = UserPermissions::host();
+        let role = UserRole::Host;
 
         let (id, mut controller) = Room::create(name, password);
         controller
-            .join(permissions.clone(), session_info)
+            .join(role, session_info)
             .await
             .context("Failed to create new room")?;
         let message_tx = controller.message_sender();
         self.room_controllers.insert(id, controller);
         Ok(RoomHandle {
             id,
-            permissions,
+            role,
             message_tx,
         })
     }
@@ -351,18 +427,18 @@ impl RoomManager {
     ) -> anyhow::Result<Option<RoomHandle>> {
         // TODO: it's probably not the best idea to assume we trust anyone who joins the room, but
         // there isn't a system for assigning permissions yet (1.4.2025)
-        let permissions = UserPermissions::trusted();
+        let role = UserRole::Guest;
 
         let Some(controller) = self.room_controllers.get_mut(&id) else {
             return Ok(None);
         };
         let message_tx = controller
-            .join(permissions.clone(), session_info)
+            .join(role, session_info)
             .await
             .context(format!("Failed to join room {id}"))?;
         Ok(Some(RoomHandle {
             id,
-            permissions,
+            role,
             message_tx,
         }))
     }

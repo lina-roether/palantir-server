@@ -56,16 +56,29 @@ pub struct RoomJoinMsgBodyV1 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RoomUserRoleV1 {
+    #[serde(rename = "host")]
+    Host,
+    #[serde(rename = "guest")]
+    Guest,
+
+    #[serde(rename = "spectator")]
+    Spectator,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RoomUserPermissionsV1 {
     pub can_share: bool,
     pub can_close: bool,
+    pub can_set_roles: bool,
+    pub can_kick: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RoomUserV1 {
     pub id: Uuid,
     pub name: String,
-    pub permissions: RoomUserPermissionsV1,
+    pub role: RoomUserRoleV1,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -74,6 +87,23 @@ pub struct RoomStateMsgBodyV1 {
     pub name: String,
     pub password: String,
     pub users: Vec<RoomUserV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoomPermissionsMsgBodyV1 {
+    pub role: RoomUserRoleV1,
+    pub permissions: RoomUserPermissionsV1,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoomSetUserRoleMsgBodyV1 {
+    pub user_id: Uuid,
+    pub role: RoomUserRoleV1,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoomKickUserMsgBodyV1 {
+    pub user_id: Uuid,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -165,6 +195,18 @@ pub enum MessageBody {
 
     #[serde(rename = "room::state/v1")]
     RoomStateV1(RoomStateMsgBodyV1),
+
+    #[serde(rename = "room::request_permissions/v1")]
+    RoomRequestPermissionsV1,
+
+    #[serde(rename = "room::set_user_role/v1")]
+    RoomSetUserRole(RoomSetUserRoleMsgBodyV1),
+
+    #[serde(rename = "room::kick_user/v1")]
+    RoomKickUser(RoomKickUserMsgBodyV1),
+
+    #[serde(rename = "room::permissions/v1")]
+    RoomPermissionsV1(RoomPermissionsMsgBodyV1),
 
     #[serde(rename = "playback::select/v1")]
     PlaybackSelectV1(PlaybackSelectMsgBodyV1),
