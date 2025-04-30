@@ -180,7 +180,7 @@ impl Session {
             return Ok(());
         }
 
-        log::debug!("Session {} requested to kick its room", self.id);
+        log::debug!("Session {} requested to leave its room", self.id);
         self.send_room_msg(RoomMsg::Leave(self.id)).await?;
         self.room = None;
         let result = self
@@ -216,8 +216,14 @@ impl Session {
             return Err(anyhow!("Not authorized to set user roles"));
         }
 
-        log::debug!("Session {} requested to set role for {} to {:?}", self.id, session_id, role);
-        self.send_room_msg(RoomMsg::SetRole(session_id, role)).await?;
+        log::debug!(
+            "Session {} requested to set role for {} to {:?}",
+            self.id,
+            session_id,
+            role
+        );
+        self.send_room_msg(RoomMsg::SetRole(session_id, role))
+            .await?;
         Ok(())
     }
 
@@ -274,7 +280,10 @@ impl Session {
             MessageBody::RoomLeaveV1 => self.leave_room().await,
             MessageBody::RoomRequestStateV1 => self.request_state().await,
             MessageBody::RoomRequestPermissionsV1 => self.send_room_permissions().await,
-            MessageBody::RoomSetUserRole(body) => self.
+            MessageBody::RoomSetUserRole(body) => {
+                self.set_user_role(body.user_id, body.role.into()).await
+            }
+            MessageBody::RoomKickUser(body) => self.kick(body.user_id).await,
             _ => Ok(()),
         };
         if let Some(err) = result.err() {
