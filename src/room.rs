@@ -301,13 +301,12 @@ impl Room {
         new_host_id
     }
 
-    async fn handle_msg(&mut self, msg: RoomMsg) -> anyhow::Result<()> {
+    async fn handle_msg(&mut self, msg: RoomMsg) {
         match msg {
             RoomMsg::RequestState => self.broadcast_state().await,
-            RoomMsg::SetRole(session_id, role) => self.set_role(role, session_id).await?,
+            RoomMsg::SetRole(session_id, role) => self.set_role(role, session_id).await,
             RoomMsg::Leave(session_id) => self.leave(session_id).await,
         }
-        Ok(())
     }
 
     async fn join(&mut self, role: UserRole, session_info: SessionInfo) -> anyhow::Result<()> {
@@ -326,13 +325,12 @@ impl Room {
         Ok(())
     }
 
-    async fn set_role(&mut self, role: UserRole, session_id: Uuid) -> anyhow::Result<()> {
+    async fn set_role(&mut self, role: UserRole, session_id: Uuid) {
         let Some(user) = self.users.get_mut(&session_id) else {
-            return Err(anyhow!("User doesn't exist"));
+            return;
         };
         user.role = role;
         self.broadcast_state().await;
-        Ok(())
     }
 
     async fn close(&mut self, reason: RoomCloseReason) {
