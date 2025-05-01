@@ -9,11 +9,10 @@ use std::{
 use anyhow::{anyhow, Context};
 use futures::executor;
 use futures_util::Future;
-use log::{debug, error, info, trace};
+use log::{debug, error, info};
 use serde::Deserialize;
 use tokio::{
     net::{TcpListener, TcpStream},
-    sync::mpsc,
     time::timeout,
 };
 use tokio_tungstenite::WebSocketStream;
@@ -59,7 +58,6 @@ impl Default for ServerConfig {
 }
 
 pub struct ConnectionListener {
-    config: ServerConfig,
     listener: TcpListener,
 }
 
@@ -69,7 +67,7 @@ impl ConnectionListener {
         let listener = TcpListener::bind(&*addrs)
             .await
             .context("Failed to start TCP server")?;
-        Ok(Self { listener, config })
+        Ok(Self { listener })
     }
 
     pub async fn listen<F: Future<Output = anyhow::Result<()>> + Send>(
@@ -136,7 +134,6 @@ pub struct PingResult {
 pub enum CloseReason {
     ServerError,
     Unauthorized,
-    RoomClosed,
 }
 
 impl Connection {
@@ -348,7 +345,6 @@ impl Connection {
                 ConnectionClosedMsgBodyV1 {
                     reason: match reason {
                         CloseReason::ServerError => ConnectionClosedReasonV1::ServerError,
-                        CloseReason::RoomClosed => ConnectionClosedReasonV1::RoomClosed,
                         CloseReason::Unauthorized => ConnectionClosedReasonV1::Unauthorized,
                     },
                     message: message.to_string(),
