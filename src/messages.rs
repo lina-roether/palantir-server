@@ -1,4 +1,4 @@
-use std::{error::Error, io::Cursor, time::SystemTime};
+use std::{error::Error, io::Cursor};
 
 use anyhow::{anyhow, Context};
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
@@ -82,11 +82,20 @@ pub struct RoomUserV1 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoomPlaybackInfoV1 {
+    pub user_id: Uuid,
+    pub user_name: String,
+    pub title: String,
+    pub href: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RoomStateMsgBodyV1 {
     pub id: Uuid,
     pub name: String,
     pub password: String,
     pub users: Vec<RoomUserV1>,
+    pub playback_info: Option<RoomPlaybackInfoV1>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -131,11 +140,16 @@ pub struct PlaybackSourceV1 {
     pub element_query: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlaybackStateV1 {
-    pub active_sync: bool,
+    pub timestamp: u64,
     pub playing: bool,
-    pub time: u64,
+    pub time: f32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlaybackAvailableMsgBodyV1 {
+    pub info: RoomPlaybackInfoV1,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -143,13 +157,13 @@ pub struct PlaybackStartMsgBodyV1 {
     pub source: PlaybackSourceV1,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlaybackSyncMsgBodyV1 {
     pub source: PlaybackSourceV1,
     pub state: PlaybackStateV1,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "m")]
 #[non_exhaustive]
 pub enum MessageBody {
@@ -219,6 +233,9 @@ pub enum MessageBody {
     #[serde(rename = "room::permissions/v1")]
     RoomPermissionsV1(RoomPermissionsMsgBodyV1),
 
+    #[serde(rename = "playback::available/v1")]
+    PlaybackAvailableV1(PlaybackAvailableMsgBodyV1),
+
     #[serde(rename = "playback::start/v1")]
     PlaybackStartV1(PlaybackStartMsgBodyV1),
 
@@ -247,7 +264,7 @@ pub enum MessageBody {
     PlaybackDisconnectAckV1,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Message {
     #[serde(rename = "t")]
     pub timestamp: u64,

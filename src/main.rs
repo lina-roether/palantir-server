@@ -5,6 +5,7 @@ mod app;
 mod config;
 mod connection;
 mod messages;
+mod playback;
 mod room;
 mod session;
 mod utils;

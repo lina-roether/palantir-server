@@ -1,4 +1,10 @@
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{
+        atomic::{AtomicI64, Ordering},
+        Arc, Weak,
+    },
+    time::Duration,
+};
 
 use anyhow::{anyhow, Context};
 use log::{debug, error, warn};
@@ -11,9 +17,11 @@ use uuid::Uuid;
 use crate::{
     connection::{CloseReason, Connection},
     messages::{
-        Message, MessageBody, RoomDisconnectedMsgBodyV1, RoomDisconnectedReasonV1,
-        RoomPermissionsMsgBodyV1, RoomStateMsgBodyV1, RoomUserV1,
+        Message, MessageBody, PlaybackAvailableMsgBodyV1, PlaybackSyncMsgBodyV1,
+        RoomDisconnectedMsgBodyV1, RoomDisconnectedReasonV1, RoomPermissionsMsgBodyV1,
+        RoomPlaybackInfoV1, RoomStateMsgBodyV1, RoomUserV1,
     },
+    playback::{PlaybackInfo, PlaybackSource, PlaybackState},
     room::{RoomCloseReason, RoomHandle, RoomManager, RoomMsg, RoomState, UserRole},
 };
 
@@ -21,12 +29,19 @@ use crate::{
 pub enum SessionMsg {
     RoomState(RoomState),
     RoomClosed(RoomCloseReason),
+    PlaybackAvailable(PlaybackInfo),
+    PlaybackStarted,
+    PlaybackConnected,
+    PlaybackSync(PlaybackSource, PlaybackState),
+    PlaybackStopped,
+    PlaybackDisconnected,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SessionHandle {
     pub id: Uuid,
     pub name: String,
+    time_offset: Weak<AtomicI64>,
     message_tx: mpsc::WeakSender<SessionMsg>,
 }
 
@@ -37,6 +52,13 @@ impl SessionHandle {
         };
         message_tx.send(msg).await?;
         Ok(true)
+    }
+
+    pub fn time_offset(&self) -> i64 {
+        self.time_offset
+            .upgrade()
+            .map(|t| t.load(Ordering::Relaxed))
+            .unwrap_or(0)
     }
 }
 
@@ -49,7 +71,7 @@ pub struct Session {
     message_rx: mpsc::Receiver<SessionMsg>,
     connection: Connection,
     ping_interval: time::Interval,
-    time_offset: i64,
+    time_offset: Arc<AtomicI64>,
 }
 
 impl Session {
@@ -65,7 +87,7 @@ impl Session {
             message_tx,
             connection,
             room_manager,
-            time_offset: 0,
+            time_offset: Arc::new(0.into()),
             ping_interval: time::interval(Self::PING_INTERVAL),
         }
     }
@@ -103,7 +125,9 @@ impl Session {
 
     async fn ping(&mut self) {
         match self.connection.ping().await {
-            Ok(Some(result)) => self.time_offset = result.time_offset,
+            Ok(Some(result)) => self
+                .time_offset
+                .store(result.time_offset, Ordering::Relaxed),
             Ok(None) => (), // the connection was closed; this is handled separately
             Err(err) => log::debug!("Failed to ping client: {err:?}"),
         };
@@ -309,42 +333,65 @@ impl Session {
     }
 
     async fn send_room_state(&mut self, state: RoomState) -> anyhow::Result<()> {
-        self.connection
-            .send(Message::new(MessageBody::RoomStateV1(RoomStateMsgBodyV1 {
-                id: state.id,
-                name: state.name,
-                password: state.password,
-                users: state
-                    .users
-                    .iter()
-                    .map(|user| RoomUserV1 {
-                        id: user.id,
-                        name: user.name.clone(),
-                        role: user.role.into(),
-                    })
-                    .collect(),
-            })))
-            .await
+        self.send_message(MessageBody::RoomStateV1(RoomStateMsgBodyV1 {
+            id: state.id,
+            name: state.name,
+            password: state.password,
+            playback_info: state.playback_info.map(RoomPlaybackInfoV1::from),
+            users: state
+                .users
+                .iter()
+                .map(|user| RoomUserV1 {
+                    id: user.id,
+                    name: user.name.clone(),
+                    role: user.role.into(),
+                })
+                .collect(),
+        }))
+        .await
     }
 
     async fn room_closed(&mut self, reason: RoomCloseReason) -> anyhow::Result<()> {
         self.room = None;
-        self.connection
-            .send(Message::new(MessageBody::RoomDisconnectedV1(
-                RoomDisconnectedMsgBodyV1 {
-                    reason: match reason {
-                        RoomCloseReason::ServerError => RoomDisconnectedReasonV1::ServerError,
-                        RoomCloseReason::ClosedByHost => RoomDisconnectedReasonV1::ClosedByHost,
-                    },
-                },
-            )))
-            .await
+        self.send_message(MessageBody::RoomDisconnectedV1(RoomDisconnectedMsgBodyV1 {
+            reason: match reason {
+                RoomCloseReason::ServerError => RoomDisconnectedReasonV1::ServerError,
+                RoomCloseReason::ClosedByHost => RoomDisconnectedReasonV1::ClosedByHost,
+            },
+        }))
+        .await
+    }
+
+    async fn send_message(&mut self, body: MessageBody) -> anyhow::Result<()> {
+        self.connection.send(Message::new(body)).await
     }
 
     async fn handle_session_msg(&mut self, msg: SessionMsg) {
         let result = match msg {
             SessionMsg::RoomState(state) => self.send_room_state(state).await,
             SessionMsg::RoomClosed(reason) => self.room_closed(reason).await,
+            SessionMsg::PlaybackAvailable(info) => {
+                self.send_message(MessageBody::PlaybackAvailableV1(
+                    PlaybackAvailableMsgBodyV1 { info: info.into() },
+                ))
+                .await
+            }
+            SessionMsg::PlaybackStarted => self.send_message(MessageBody::PlaybackStartAckV1).await,
+            SessionMsg::PlaybackConnected => {
+                self.send_message(MessageBody::PlaybackConnectAckV1).await
+            }
+            SessionMsg::PlaybackSync(source, state) => {
+                self.send_message(MessageBody::PlaybackSyncV1(PlaybackSyncMsgBodyV1 {
+                    source: source.into(),
+                    state: state.into(),
+                }))
+                .await
+            }
+            SessionMsg::PlaybackStopped => self.send_message(MessageBody::PlaybackStopAckV1).await,
+            SessionMsg::PlaybackDisconnected => {
+                self.send_message(MessageBody::PlaybackDisconnectAckV1)
+                    .await
+            }
         };
         if let Some(err) = result.err() {
             error!("Failed to handle session message: {err:?}");
@@ -355,6 +402,7 @@ impl Session {
         SessionHandle {
             id: self.id,
             name: self.connection.username().to_string(),
+            time_offset: Arc::downgrade(&self.time_offset),
             message_tx: self.message_tx.clone().downgrade(),
         }
     }

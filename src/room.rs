@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 use crate::{
     messages::{RoomUserPermissionsV1, RoomUserRoleV1},
+    playback::{Playback, PlaybackInfo},
     session::{SessionHandle, SessionMsg},
 };
 
@@ -179,6 +180,7 @@ pub struct RoomState {
     pub id: Uuid,
     pub name: String,
     pub password: String,
+    pub playback_info: Option<PlaybackInfo>,
     pub users: Vec<UserData>,
 }
 
@@ -188,6 +190,7 @@ struct Room {
     name: String,
     password: String,
     users: HashMap<Uuid, User>,
+    playback: Option<Playback>,
     command_rx: mpsc::Receiver<RoomCmd>,
     message_rx: mpsc::Receiver<RoomMsg>,
 }
@@ -206,6 +209,7 @@ impl Room {
             password,
             command_rx,
             message_rx,
+            playback: None,
             users: HashMap::new(),
         }
     }
@@ -215,6 +219,7 @@ impl Room {
             id: self.id,
             name: self.name.clone(),
             password: self.password.clone(),
+            playback_info: self.playback.as_ref().map(Playback::get_info),
             users: self
                 .users
                 .iter()
