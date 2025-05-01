@@ -285,7 +285,14 @@ impl Room {
             .iter()
             .all(|(_, user)| user.role != UserRole::Host)
         {
-            // TODO
+            let Some(new_host_id) = self.choose_new_host_id() else {
+                log::debug!(
+                    "failed to choose a new host id in session {session_id}! closing the room!"
+                );
+                self.close(RoomCloseReason::ServerError).await;
+                return;
+            };
+            self.set_role(UserRole::Host, new_host_id).await;
         }
         self.broadcast_state().await;
     }
