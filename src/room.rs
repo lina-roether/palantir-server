@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use crate::{
     messages::{RoomUserPermissionsV1, RoomUserRoleV1},
-    session::SessionMsg,
+    session::{SessionHandle, SessionMsg},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,13 +96,6 @@ impl Default for UserPermissions {
     }
 }
 
-#[derive(Debug)]
-pub struct SessionInfo {
-    pub session_id: Uuid,
-    pub session_message_tx: mpsc::WeakSender<SessionMsg>,
-    pub name: String,
-}
-
 #[derive(Debug, Clone, Copy)]
 pub enum RoomCloseReason {
     ClosedByHost,
@@ -111,15 +104,14 @@ pub enum RoomCloseReason {
 
 #[derive(Debug)]
 enum RoomCmd {
-    Join(UserRole, SessionInfo),
+    Join(UserRole, SessionHandle),
     Close(RoomCloseReason),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct User {
-    name: String,
     role: UserRole,
-    message_tx: mpsc::WeakSender<SessionMsg>,
+    session: SessionHandle,
 }
 
 #[derive(Debug, Clone)]
@@ -145,9 +137,9 @@ impl RoomController {
     async fn join(
         &mut self,
         role: UserRole,
-        info: SessionInfo,
+        session: SessionHandle,
     ) -> anyhow::Result<mpsc::WeakSender<RoomMsg>> {
-        self.command_tx.send(RoomCmd::Join(role, info)).await?;
+        self.command_tx.send(RoomCmd::Join(role, session)).await?;
         Ok(self.message_sender())
     }
 
@@ -158,10 +150,21 @@ impl RoomController {
     }
 }
 
+#[derive(Debug)]
 pub struct RoomHandle {
     pub id: Uuid,
     pub role: UserRole,
-    pub message_tx: mpsc::WeakSender<RoomMsg>,
+    message_tx: mpsc::WeakSender<RoomMsg>,
+}
+
+impl RoomHandle {
+    pub async fn send_message(&self, msg: RoomMsg) -> anyhow::Result<bool> {
+        let Some(message_tx) = self.message_tx.upgrade() else {
+            return Ok(false);
+        };
+        message_tx.send(msg).await?;
+        Ok(true)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -217,7 +220,7 @@ impl Room {
                 .iter()
                 .map(|(id, user)| UserData {
                     id: *id,
-                    name: user.name.clone(),
+                    name: user.session.name.clone(),
                     role: user.role,
                 })
                 .collect(),
@@ -247,11 +250,9 @@ impl Room {
         let Some(user) = self.users.get(&id) else {
             return Ok(());
         };
-        let Some(message_tx) = user.message_tx.upgrade() else {
+        if !user.session.send_message(msg).await? {
             Box::pin(self.leave(id)).await;
-            return Ok(());
         };
-        message_tx.send(msg).await?;
         Ok(())
     }
 
@@ -316,18 +317,11 @@ impl Room {
         }
     }
 
-    async fn join(&mut self, role: UserRole, session_info: SessionInfo) -> anyhow::Result<()> {
-        if self.users.contains_key(&session_info.session_id) {
+    async fn join(&mut self, role: UserRole, session: SessionHandle) -> anyhow::Result<()> {
+        if self.users.contains_key(&session.id) {
             return Err(anyhow!("Already joined this room"));
         }
-        self.users.insert(
-            session_info.session_id,
-            User {
-                name: session_info.name,
-                role,
-                message_tx: session_info.session_message_tx,
-            },
-        );
+        self.users.insert(session.id, User { role, session });
         self.broadcast_state().await;
         Ok(())
     }
@@ -398,17 +392,17 @@ impl RoomManager {
         &mut self,
         name: String,
         password: String,
-        session_info: SessionInfo,
+        session: SessionHandle,
     ) -> anyhow::Result<RoomHandle> {
         log::debug!(
             "Creating room with name {name} for session {}...",
-            session_info.session_id
+            session.id
         );
         let role = UserRole::Host;
 
         let (id, mut controller) = Room::create(name, password);
         controller
-            .join(role, session_info)
+            .join(role, session)
             .await
             .context("Failed to create new room")?;
         let message_tx = controller.message_sender();
@@ -428,7 +422,7 @@ impl RoomManager {
     pub async fn join_room(
         &mut self,
         id: Uuid,
-        session_info: SessionInfo,
+        session: SessionHandle,
     ) -> anyhow::Result<Option<RoomHandle>> {
         // TODO: it's probably not the best idea to assume we trust anyone who joins the room, but
         // there isn't a system for assigning permissions yet (1.4.2025)
@@ -438,7 +432,7 @@ impl RoomManager {
             return Ok(None);
         };
         let message_tx = controller
-            .join(role, session_info)
+            .join(role, session)
             .await
             .context(format!("Failed to join room {id}"))?;
         Ok(Some(RoomHandle {

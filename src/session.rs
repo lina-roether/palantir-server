@@ -14,13 +14,30 @@ use crate::{
         Message, MessageBody, RoomDisconnectedMsgBodyV1, RoomDisconnectedReasonV1,
         RoomPermissionsMsgBodyV1, RoomStateMsgBodyV1, RoomUserV1,
     },
-    room::{self, RoomCloseReason, RoomHandle, RoomManager, RoomMsg, RoomState, UserRole},
+    room::{RoomCloseReason, RoomHandle, RoomManager, RoomMsg, RoomState, UserRole},
 };
 
 #[derive(Debug, Clone)]
 pub enum SessionMsg {
     RoomState(RoomState),
     RoomClosed(RoomCloseReason),
+}
+
+#[derive(Debug)]
+pub struct SessionHandle {
+    pub id: Uuid,
+    pub name: String,
+    message_tx: mpsc::WeakSender<SessionMsg>,
+}
+
+impl SessionHandle {
+    pub async fn send_message(&self, msg: SessionMsg) -> anyhow::Result<bool> {
+        let Some(message_tx) = self.message_tx.upgrade() else {
+            return Ok(false);
+        };
+        message_tx.send(msg).await?;
+        Ok(true)
+    }
 }
 
 pub struct Session {
@@ -109,7 +126,7 @@ impl Session {
             .room_manager
             .lock()
             .await
-            .create_room(name, password, self.session_info())
+            .create_room(name, password, self.get_handle())
             .await?;
         self.room = Some(room_handle);
 
@@ -158,7 +175,7 @@ impl Session {
             return Err(anyhow!("Incorrect password"));
         }
 
-        let room_handle = room_mgr.join_room(room_id, self.session_info()).await?;
+        let room_handle = room_mgr.join_room(room_id, self.get_handle()).await?;
 
         if let Some(handle) = room_handle {
             self.room = Some(handle);
@@ -251,7 +268,7 @@ impl Session {
         let Some(room_handle) = &self.room else {
             return Err(anyhow!("Not currently in a room"));
         };
-        let Some(message_tx) = room_handle.message_tx.upgrade() else {
+        if !room_handle.send_message(msg).await? {
             warn!("Room {} was unexpectedly closed", room_handle.id);
             self.room = None;
             self.connection
@@ -264,7 +281,6 @@ impl Session {
                 .context("Failed to send disconnect message")?;
             return Ok(());
         };
-        message_tx.send(msg).await?;
         Ok(())
     }
 
@@ -335,11 +351,11 @@ impl Session {
         }
     }
 
-    fn session_info(&self) -> room::SessionInfo {
-        room::SessionInfo {
-            session_id: self.id,
-            session_message_tx: self.message_tx.clone().downgrade(),
+    fn get_handle(&self) -> SessionHandle {
+        SessionHandle {
+            id: self.id,
             name: self.connection.username().to_string(),
+            message_tx: self.message_tx.clone().downgrade(),
         }
     }
 }
