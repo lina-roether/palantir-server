@@ -127,6 +127,7 @@ pub struct Connection {
 
 #[derive(Debug, Clone)]
 pub struct PingResult {
+    pub latency: u64,
     pub time_offset: i64,
 }
 
@@ -317,13 +318,17 @@ impl Connection {
             Ok(None) => Ok(None),
             Ok(Some(actual_timestamp)) => {
                 let end_time = timestamp();
-                let expected_timestamp = start_time + u64::abs_diff(start_time, end_time) / 2;
+                let latency = u64::saturating_sub(end_time, start_time);
+                let expected_timestamp = start_time + latency / 2;
                 let time_offset = u64::wrapping_sub(actual_timestamp, expected_timestamp) as i64;
                 debug!(
                     "Pinged client {}, and found a time offset of {time_offset}ms",
                     self.name
                 );
-                Ok(Some(PingResult { time_offset }))
+                Ok(Some(PingResult {
+                    latency,
+                    time_offset,
+                }))
             }
             Err(timeout_err) => {
                 let err = anyhow!(timeout_err).context("Pong message not received in time!");
