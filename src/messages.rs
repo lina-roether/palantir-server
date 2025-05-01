@@ -124,18 +124,29 @@ pub struct RoomDisconnectedMsgBodyV1 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PlaybackSelectMsgBodyV1 {
+pub struct PlaybackSourceV1 {
+    pub title: String,
     pub page_href: String,
     pub frame_href: String,
     pub element_query: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PlaybackSyncMsgBodyV1 {
+pub struct PlaybackStateV1 {
     pub active_sync: bool,
     pub playing: bool,
     pub time: u64,
-    pub timestamp: SystemTime,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlaybackStartMsgBodyV1 {
+    pub source: PlaybackSourceV1,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlaybackSyncMsgBodyV1 {
+    pub source: PlaybackSourceV1,
+    pub state: PlaybackStateV1,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -208,11 +219,32 @@ pub enum MessageBody {
     #[serde(rename = "room::permissions/v1")]
     RoomPermissionsV1(RoomPermissionsMsgBodyV1),
 
-    #[serde(rename = "playback::select/v1")]
-    PlaybackSelectV1(PlaybackSelectMsgBodyV1),
+    #[serde(rename = "playback::start/v1")]
+    PlaybackStartV1(PlaybackStartMsgBodyV1),
+
+    #[serde(rename = "playback::start_ack/v1")]
+    PlaybackStartAckV1,
+
+    #[serde(rename = "playback::connect/v1")]
+    PlaybackConnectV1,
+
+    #[serde(rename = "playback::connect_ack/v1")]
+    PlaybackConnectAckV1,
 
     #[serde(rename = "playback::sync/v1")]
     PlaybackSyncV1(PlaybackSyncMsgBodyV1),
+
+    #[serde(rename = "playback::stop/v1")]
+    PlaybackStopV1,
+
+    #[serde(rename = "playback::stop_ack/v1")]
+    PlaybackStopAckV1,
+
+    #[serde(rename = "playback::disconnect/v1")]
+    PlaybackDisconnectV1,
+
+    #[serde(rename = "playback::disconnect_ack/v1")]
+    PlaybackDisconnectAckV1,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
