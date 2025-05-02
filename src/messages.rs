@@ -159,8 +159,35 @@ pub struct PlaybackStartMsgBodyV1 {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlaybackSyncMsgBodyV1 {
-    pub source: PlaybackSourceV1,
     pub state: PlaybackStateV1,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PlaybackStopReasonV1 {
+    #[serde(rename = "host_error")]
+    HostError,
+
+    #[serde(rename = "stopped_by_host")]
+    StoppedByHost,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlaybackStoppedMsgBodyV1 {
+    pub reason: PlaybackStopReasonV1,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PlaybackDisconnectReasonV1 {
+    #[serde(rename = "stopped")]
+    Stopped,
+
+    #[serde(rename = "subscriber_error")]
+    SubscriberError,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlaybackDisconnectedMsgBodyV1 {
+    pub reason: PlaybackDisconnectReasonV1,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -236,32 +263,32 @@ pub enum MessageBody {
     #[serde(rename = "playback::available/v1")]
     PlaybackAvailableV1(PlaybackAvailableMsgBodyV1),
 
-    #[serde(rename = "playback::start/v1")]
-    PlaybackStartV1(PlaybackStartMsgBodyV1),
+    #[serde(rename = "playback::request_start/v1")]
+    PlaybackRequestStartV1(PlaybackStartMsgBodyV1),
 
-    #[serde(rename = "playback::start_ack/v1")]
-    PlaybackStartAckV1,
+    #[serde(rename = "playback::started/v1")]
+    PlaybackStartedV1,
 
-    #[serde(rename = "playback::connect/v1")]
-    PlaybackConnectV1,
+    #[serde(rename = "playback::request_connect/v1")]
+    PlaybackRequestConnectV1,
 
-    #[serde(rename = "playback::connect_ack/v1")]
-    PlaybackConnectAckV1,
+    #[serde(rename = "playback::connected/v1")]
+    PlaybackConnectedV1,
 
     #[serde(rename = "playback::sync/v1")]
     PlaybackSyncV1(PlaybackSyncMsgBodyV1),
 
-    #[serde(rename = "playback::stop/v1")]
-    PlaybackStopV1,
+    #[serde(rename = "playback::request_stop/v1")]
+    PlaybackRequestStopV1,
 
-    #[serde(rename = "playback::stop_ack/v1")]
-    PlaybackStopAckV1,
+    #[serde(rename = "playback::stopped/v1")]
+    PlaybackStoppedV1(PlaybackStoppedMsgBodyV1),
 
-    #[serde(rename = "playback::disconnect/v1")]
-    PlaybackDisconnectV1,
+    #[serde(rename = "playback::request_disconnect/v1")]
+    PlaybackRequestDisconnectV1,
 
-    #[serde(rename = "playback::disconnect_ack/v1")]
-    PlaybackDisconnectAckV1,
+    #[serde(rename = "playback::disconnected/v1")]
+    PlaybackDisconnectedV1(PlaybackDisconnectedMsgBodyV1),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

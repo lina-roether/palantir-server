@@ -17,11 +17,12 @@ use uuid::Uuid;
 use crate::{
     connection::{CloseReason, Connection},
     messages::{
-        Message, MessageBody, PlaybackAvailableMsgBodyV1, PlaybackSyncMsgBodyV1,
-        RoomDisconnectedMsgBodyV1, RoomDisconnectedReasonV1, RoomPermissionsMsgBodyV1,
-        RoomPlaybackInfoV1, RoomStateMsgBodyV1, RoomUserV1,
+        Message, MessageBody, PlaybackAvailableMsgBodyV1, PlaybackDisconnectedMsgBodyV1,
+        PlaybackStoppedMsgBodyV1, PlaybackSyncMsgBodyV1, RoomDisconnectedMsgBodyV1,
+        RoomDisconnectedReasonV1, RoomPermissionsMsgBodyV1, RoomPlaybackInfoV1, RoomStateMsgBodyV1,
+        RoomUserV1,
     },
-    playback::{PlaybackInfo, PlaybackSource, PlaybackState},
+    playback::{DisconnectReason, PlaybackInfo, PlaybackState, StopReason},
     room::{RoomCloseReason, RoomHandle, RoomManager, RoomMsg, RoomState, UserRole},
 };
 
@@ -32,9 +33,9 @@ pub enum SessionMsg {
     PlaybackAvailable(PlaybackInfo),
     PlaybackStarted,
     PlaybackConnected,
-    PlaybackSync(PlaybackSource, PlaybackState),
-    PlaybackStopped,
-    PlaybackDisconnected,
+    PlaybackSync(PlaybackState),
+    PlaybackStopped(StopReason),
+    PlaybackDisconnected(DisconnectReason),
 }
 
 #[derive(Debug, Clone)]
@@ -376,21 +377,29 @@ impl Session {
                 ))
                 .await
             }
-            SessionMsg::PlaybackStarted => self.send_message(MessageBody::PlaybackStartAckV1).await,
+            SessionMsg::PlaybackStarted => self.send_message(MessageBody::PlaybackStartedV1).await,
             SessionMsg::PlaybackConnected => {
-                self.send_message(MessageBody::PlaybackConnectAckV1).await
+                self.send_message(MessageBody::PlaybackConnectedV1).await
             }
-            SessionMsg::PlaybackSync(source, state) => {
+            SessionMsg::PlaybackSync(state) => {
                 self.send_message(MessageBody::PlaybackSyncV1(PlaybackSyncMsgBodyV1 {
-                    source: source.into(),
                     state: state.into(),
                 }))
                 .await
             }
-            SessionMsg::PlaybackStopped => self.send_message(MessageBody::PlaybackStopAckV1).await,
-            SessionMsg::PlaybackDisconnected => {
-                self.send_message(MessageBody::PlaybackDisconnectAckV1)
-                    .await
+            SessionMsg::PlaybackStopped(reason) => {
+                self.send_message(MessageBody::PlaybackStoppedV1(PlaybackStoppedMsgBodyV1 {
+                    reason: reason.into(),
+                }))
+                .await
+            }
+            SessionMsg::PlaybackDisconnected(reason) => {
+                self.send_message(MessageBody::PlaybackDisconnectedV1(
+                    PlaybackDisconnectedMsgBodyV1 {
+                        reason: reason.into(),
+                    },
+                ))
+                .await
             }
         };
         if let Some(err) = result.err() {
