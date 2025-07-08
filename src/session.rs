@@ -12,18 +12,27 @@ use tokio::{
     sync::{self, mpsc},
     time,
 };
-use uuid::Uuid;
+
+id_type!(SessionId);
+
+impl From<dto::UserIdV1> for SessionId {
+    fn from(value: dto::UserIdV1) -> Self {
+        Self::from(*value)
+    }
+}
+
+impl From<SessionId> for dto::UserIdV1 {
+    fn from(value: SessionId) -> Self {
+        Self::from(*value)
+    }
+}
 
 use crate::{
     connection::{CloseReason, Connection},
-    messages::{
-        Message, MessageBody, PlaybackAvailableMsgBodyV1, PlaybackDisconnectedMsgBodyV1,
-        PlaybackStoppedMsgBodyV1, PlaybackSyncMsgBodyV1, RoomDisconnectedMsgBodyV1,
-        RoomDisconnectedReasonV1, RoomPermissionsMsgBodyV1, RoomPlaybackInfoV1, RoomStateMsgBodyV1,
-        RoomUserV1,
-    },
+    id_type,
+    messages::{dto, Message, MessageBody},
     playback::{DisconnectReason, PlaybackInfo, PlaybackState, StopReason},
-    room::{RoomCloseReason, RoomHandle, RoomManager, RoomMsg, RoomState, UserRole},
+    room::{RoomCloseReason, RoomHandle, RoomId, RoomManager, RoomMsg, RoomState, UserRole},
 };
 
 #[derive(Debug, Clone)]
@@ -40,7 +49,7 @@ pub enum SessionMsg {
 
 #[derive(Debug, Clone)]
 pub struct SessionHandle {
-    pub id: Uuid,
+    pub id: SessionId,
     pub name: String,
     time_offset: Weak<AtomicI64>,
     message_tx: mpsc::WeakSender<SessionMsg>,
@@ -64,7 +73,7 @@ impl SessionHandle {
 }
 
 pub struct Session {
-    id: Uuid,
+    id: SessionId,
     running: bool,
     room_manager: Arc<sync::Mutex<RoomManager>>,
     room: Option<RoomHandle>,
@@ -81,7 +90,7 @@ impl Session {
     pub fn new(connection: Connection, room_manager: Arc<sync::Mutex<RoomManager>>) -> Self {
         let (message_tx, message_rx) = mpsc::channel::<SessionMsg>(32);
         Self {
-            id: Uuid::new_v4(),
+            id: SessionId::new(),
             running: true,
             room: None,
             message_rx,
@@ -188,7 +197,7 @@ impl Session {
         Ok(())
     }
 
-    async fn join_room(&mut self, room_id: Uuid, password: String) -> anyhow::Result<()> {
+    async fn join_room(&mut self, room_id: RoomId, password: String) -> anyhow::Result<()> {
         log::debug!("Session {} requested to join room {room_id}", self.id);
         self.leave_room()
             .await
@@ -235,7 +244,7 @@ impl Session {
         Ok(())
     }
 
-    async fn kick(&mut self, session_id: Uuid) -> anyhow::Result<()> {
+    async fn kick(&mut self, session_id: SessionId) -> anyhow::Result<()> {
         let Some(room) = &self.room else {
             return Ok(());
         };
@@ -249,7 +258,7 @@ impl Session {
         Ok(())
     }
 
-    async fn set_user_role(&mut self, session_id: Uuid, role: UserRole) -> anyhow::Result<()> {
+    async fn set_user_role(&mut self, session_id: SessionId, role: UserRole) -> anyhow::Result<()> {
         let Some(room) = &self.room else {
             return Ok(());
         };
@@ -281,7 +290,7 @@ impl Session {
         );
         self.connection
             .send(Message::new(MessageBody::RoomPermissionsV1(
-                RoomPermissionsMsgBodyV1 {
+                dto::RoomPermissionsMsgBodyV1 {
                     role: room.role.into(),
                     permissions: room.role.permissions().into(),
                 },
@@ -298,8 +307,8 @@ impl Session {
             self.room = None;
             self.connection
                 .send(Message::new(MessageBody::RoomDisconnectedV1(
-                    RoomDisconnectedMsgBodyV1 {
-                        reason: RoomDisconnectedReasonV1::ServerError,
+                    dto::RoomDisconnectedMsgBodyV1 {
+                        reason: dto::RoomDisconnectedReasonV1::ServerError,
                     },
                 )))
                 .await
@@ -317,14 +326,15 @@ impl Session {
         let result = match msg.body {
             MessageBody::RoomCreateV1(body) => self.create_room(body.name, body.password).await,
             MessageBody::RoomCloseV1 => self.close_room().await,
-            MessageBody::RoomJoinV1(body) => self.join_room(body.id, body.password).await,
+            MessageBody::RoomJoinV1(body) => self.join_room(body.id.into(), body.password).await,
             MessageBody::RoomLeaveV1 => self.leave_room().await,
             MessageBody::RoomRequestStateV1 => self.request_state().await,
             MessageBody::RoomRequestPermissionsV1 => self.send_room_permissions().await,
             MessageBody::RoomSetUserRole(body) => {
-                self.set_user_role(body.user_id, body.role.into()).await
+                self.set_user_role(body.user_id.into(), body.role.into())
+                    .await
             }
-            MessageBody::RoomKickUser(body) => self.kick(body.user_id).await,
+            MessageBody::RoomKickUser(body) => self.kick(body.user_id.into()).await,
             _ => Ok(()),
         };
         if let Some(err) = result.err() {
@@ -334,32 +344,22 @@ impl Session {
     }
 
     async fn send_room_state(&mut self, state: RoomState) -> anyhow::Result<()> {
-        self.send_message(MessageBody::RoomStateV1(RoomStateMsgBodyV1 {
-            id: state.id,
-            name: state.name,
-            password: state.password,
-            playback_info: state.playback_info.map(RoomPlaybackInfoV1::from),
-            users: state
-                .users
-                .iter()
-                .map(|user| RoomUserV1 {
-                    id: user.id,
-                    name: user.name.clone(),
-                    role: user.role.into(),
-                })
-                .collect(),
-        }))
+        self.send_message(MessageBody::RoomStateV1(dto::RoomStateMsgBodyV1::from(
+            state,
+        )))
         .await
     }
 
     async fn room_closed(&mut self, reason: RoomCloseReason) -> anyhow::Result<()> {
         self.room = None;
-        self.send_message(MessageBody::RoomDisconnectedV1(RoomDisconnectedMsgBodyV1 {
-            reason: match reason {
-                RoomCloseReason::ServerError => RoomDisconnectedReasonV1::ServerError,
-                RoomCloseReason::ClosedByHost => RoomDisconnectedReasonV1::ClosedByHost,
+        self.send_message(MessageBody::RoomDisconnectedV1(
+            dto::RoomDisconnectedMsgBodyV1 {
+                reason: match reason {
+                    RoomCloseReason::ServerError => dto::RoomDisconnectedReasonV1::ServerError,
+                    RoomCloseReason::ClosedByHost => dto::RoomDisconnectedReasonV1::ClosedByHost,
+                },
             },
-        }))
+        ))
         .await
     }
 
@@ -373,7 +373,7 @@ impl Session {
             SessionMsg::RoomClosed(reason) => self.room_closed(reason).await,
             SessionMsg::PlaybackAvailable(info) => {
                 self.send_message(MessageBody::PlaybackAvailableV1(
-                    PlaybackAvailableMsgBodyV1 { info: info.into() },
+                    dto::PlaybackAvailableMsgBodyV1 { info: info.into() },
                 ))
                 .await
             }
@@ -382,20 +382,22 @@ impl Session {
                 self.send_message(MessageBody::PlaybackConnectedV1).await
             }
             SessionMsg::PlaybackSync(state) => {
-                self.send_message(MessageBody::PlaybackSyncV1(PlaybackSyncMsgBodyV1 {
+                self.send_message(MessageBody::PlaybackSyncV1(dto::PlaybackSyncMsgBodyV1 {
                     state: state.into(),
                 }))
                 .await
             }
             SessionMsg::PlaybackStopped(reason) => {
-                self.send_message(MessageBody::PlaybackStoppedV1(PlaybackStoppedMsgBodyV1 {
-                    reason: reason.into(),
-                }))
+                self.send_message(MessageBody::PlaybackStoppedV1(
+                    dto::PlaybackStoppedMsgBodyV1 {
+                        reason: reason.into(),
+                    },
+                ))
                 .await
             }
             SessionMsg::PlaybackDisconnected(reason) => {
                 self.send_message(MessageBody::PlaybackDisconnectedV1(
-                    PlaybackDisconnectedMsgBodyV1 {
+                    dto::PlaybackDisconnectedMsgBodyV1 {
                         reason: reason.into(),
                     },
                 ))

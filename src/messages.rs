@@ -4,190 +4,199 @@ use anyhow::{anyhow, Context};
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio_tungstenite::tungstenite;
-use uuid::Uuid;
 
 use crate::utils::timestamp;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ConnectionLoginMsgBodyV1 {
-    pub username: String,
-    pub api_key: Option<String>,
-}
+pub mod dto {
+    use crate::id_type;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ConnectionClosedReasonV1 {
-    #[serde(rename = "unauthorized")]
-    Unauthorized,
+    use super::*;
 
-    #[serde(rename = "server_error")]
-    ServerError,
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct ConnectionLoginMsgBodyV1 {
+        pub username: String,
+        pub api_key: Option<String>,
+    }
 
-    #[serde(rename = "room_closed")]
-    RoomClosed,
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    pub enum ConnectionClosedReasonV1 {
+        #[serde(rename = "unauthorized")]
+        Unauthorized,
 
-    #[serde(rename = "timeout")]
-    Timeout,
+        #[serde(rename = "server_error")]
+        ServerError,
 
-    #[serde(rename = "unknown")]
-    Unknown,
-}
+        #[serde(rename = "room_closed")]
+        RoomClosed,
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ConnectionClosedMsgBodyV1 {
-    pub reason: ConnectionClosedReasonV1,
-    pub message: String,
-}
+        #[serde(rename = "timeout")]
+        Timeout,
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ConnectionClientErrorMsgBodyV1 {
-    pub message: String,
-}
+        #[serde(rename = "unknown")]
+        Unknown,
+    }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RoomCreateMsgBodyV1 {
-    pub name: String,
-    pub password: String,
-}
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct ConnectionClosedMsgBodyV1 {
+        pub reason: ConnectionClosedReasonV1,
+        pub message: String,
+    }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RoomJoinMsgBodyV1 {
-    pub id: Uuid,
-    pub password: String,
-}
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct ConnectionClientErrorMsgBodyV1 {
+        pub message: String,
+    }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum RoomUserRoleV1 {
-    #[serde(rename = "host")]
-    Host,
-    #[serde(rename = "guest")]
-    Guest,
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct RoomCreateMsgBodyV1 {
+        pub name: String,
+        pub password: String,
+    }
 
-    #[serde(rename = "spectator")]
-    Spectator,
-}
+    id_type!(RoomIdV1, Serialize, Deserialize);
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RoomUserPermissionsV1 {
-    pub can_share: bool,
-    pub can_close: bool,
-    pub can_set_roles: bool,
-    pub can_kick: bool,
-}
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct RoomJoinMsgBodyV1 {
+        pub id: RoomIdV1,
+        pub password: String,
+    }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RoomUserV1 {
-    pub id: Uuid,
-    pub name: String,
-    pub role: RoomUserRoleV1,
-}
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    pub enum RoomUserRoleV1 {
+        #[serde(rename = "host")]
+        Host,
+        #[serde(rename = "guest")]
+        Guest,
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RoomPlaybackInfoV1 {
-    pub user_id: Uuid,
-    pub user_name: String,
-    pub title: String,
-    pub href: String,
-}
+        #[serde(rename = "spectator")]
+        Spectator,
+    }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RoomStateMsgBodyV1 {
-    pub id: Uuid,
-    pub name: String,
-    pub password: String,
-    pub users: Vec<RoomUserV1>,
-    pub playback_info: Option<RoomPlaybackInfoV1>,
-}
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct RoomUserPermissionsV1 {
+        pub can_share: bool,
+        pub can_close: bool,
+        pub can_set_roles: bool,
+        pub can_kick: bool,
+    }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RoomPermissionsMsgBodyV1 {
-    pub role: RoomUserRoleV1,
-    pub permissions: RoomUserPermissionsV1,
-}
+    id_type!(UserIdV1, Serialize, Deserialize);
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RoomSetUserRoleMsgBodyV1 {
-    pub user_id: Uuid,
-    pub role: RoomUserRoleV1,
-}
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct RoomUserV1 {
+        pub id: UserIdV1,
+        pub name: String,
+        pub role: RoomUserRoleV1,
+    }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RoomKickUserMsgBodyV1 {
-    pub user_id: Uuid,
-}
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct RoomPlaybackInfoV1 {
+        pub user_id: UserIdV1,
+        pub user_name: String,
+        pub title: String,
+        pub href: String,
+    }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum RoomDisconnectedReasonV1 {
-    #[serde(rename = "closed_by_host")]
-    ClosedByHost,
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct RoomStateMsgBodyV1 {
+        pub id: RoomIdV1,
+        pub name: String,
+        pub password: String,
+        pub users: Vec<RoomUserV1>,
+        pub playback_info: Option<RoomPlaybackInfoV1>,
+    }
 
-    #[serde(rename = "unauthorized")]
-    Unauthorized,
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct RoomPermissionsMsgBodyV1 {
+        pub role: RoomUserRoleV1,
+        pub permissions: RoomUserPermissionsV1,
+    }
 
-    #[serde(rename = "server_error")]
-    ServerError,
-}
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct RoomSetUserRoleMsgBodyV1 {
+        pub user_id: UserIdV1,
+        pub role: RoomUserRoleV1,
+    }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RoomDisconnectedMsgBodyV1 {
-    pub reason: RoomDisconnectedReasonV1,
-}
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct RoomKickUserMsgBodyV1 {
+        pub user_id: UserIdV1,
+    }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PlaybackSourceV1 {
-    pub title: String,
-    pub page_href: String,
-    pub frame_href: String,
-    pub element_query: String,
-}
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    pub enum RoomDisconnectedReasonV1 {
+        #[serde(rename = "closed_by_host")]
+        ClosedByHost,
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct PlaybackStateV1 {
-    pub timestamp: u64,
-    pub playing: bool,
-    pub time: f32,
-}
+        #[serde(rename = "unauthorized")]
+        Unauthorized,
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PlaybackAvailableMsgBodyV1 {
-    pub info: RoomPlaybackInfoV1,
-}
+        #[serde(rename = "server_error")]
+        ServerError,
+    }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PlaybackStartMsgBodyV1 {
-    pub source: PlaybackSourceV1,
-}
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct RoomDisconnectedMsgBodyV1 {
+        pub reason: RoomDisconnectedReasonV1,
+    }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct PlaybackSyncMsgBodyV1 {
-    pub state: PlaybackStateV1,
-}
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct PlaybackSourceV1 {
+        pub title: String,
+        pub page_href: String,
+        pub frame_href: String,
+        pub element_query: String,
+    }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum PlaybackStopReasonV1 {
-    #[serde(rename = "host_error")]
-    HostError,
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    pub struct PlaybackStateV1 {
+        pub timestamp: u64,
+        pub playing: bool,
+        pub time: f32,
+    }
 
-    #[serde(rename = "stopped_by_host")]
-    StoppedByHost,
-}
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct PlaybackAvailableMsgBodyV1 {
+        pub info: RoomPlaybackInfoV1,
+    }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PlaybackStoppedMsgBodyV1 {
-    pub reason: PlaybackStopReasonV1,
-}
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct PlaybackStartMsgBodyV1 {
+        pub source: PlaybackSourceV1,
+    }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum PlaybackDisconnectReasonV1 {
-    #[serde(rename = "subscriber_error")]
-    SubscriberError,
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    pub struct PlaybackSyncMsgBodyV1 {
+        pub state: PlaybackStateV1,
+    }
 
-    #[serde(untagged)]
-    Stopped(PlaybackStopReasonV1),
-}
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    pub enum PlaybackStopReasonV1 {
+        #[serde(rename = "host_error")]
+        HostError,
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PlaybackDisconnectedMsgBodyV1 {
-    pub reason: PlaybackDisconnectReasonV1,
+        #[serde(rename = "stopped_by_host")]
+        StoppedByHost,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct PlaybackStoppedMsgBodyV1 {
+        pub reason: PlaybackStopReasonV1,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    pub enum PlaybackDisconnectReasonV1 {
+        #[serde(rename = "subscriber_error")]
+        SubscriberError,
+
+        #[serde(untagged)]
+        Stopped(PlaybackStopReasonV1),
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct PlaybackDisconnectedMsgBodyV1 {
+        pub reason: PlaybackDisconnectReasonV1,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -195,7 +204,7 @@ pub struct PlaybackDisconnectedMsgBodyV1 {
 #[non_exhaustive]
 pub enum MessageBody {
     #[serde(rename = "connection::login/v1")]
-    ConnectionLoginV1(ConnectionLoginMsgBodyV1),
+    ConnectionLoginV1(dto::ConnectionLoginMsgBodyV1),
 
     #[serde(rename = "connection::login_ack/v1")]
     ConnectionLoginAckV1,
@@ -207,16 +216,16 @@ pub enum MessageBody {
     ConnectionPongV1,
 
     #[serde(rename = "connection::client_error/v1")]
-    ConnectionClientErrorV1(ConnectionClientErrorMsgBodyV1),
+    ConnectionClientErrorV1(dto::ConnectionClientErrorMsgBodyV1),
 
     #[serde(rename = "connection::closed/v1")]
-    ConnectionClosedV1(ConnectionClosedMsgBodyV1),
+    ConnectionClosedV1(dto::ConnectionClosedMsgBodyV1),
 
     #[serde(rename = "connection::keepalive/v1")]
     ConnectionKeepaliveV1,
 
     #[serde(rename = "room::create/v1")]
-    RoomCreateV1(RoomCreateMsgBodyV1),
+    RoomCreateV1(dto::RoomCreateMsgBodyV1),
 
     #[serde(rename = "room::create_ack/v1")]
     RoomCreateAckV1,
@@ -228,7 +237,7 @@ pub enum MessageBody {
     RoomCloseAckV1,
 
     #[serde(rename = "room::join/v1")]
-    RoomJoinV1(RoomJoinMsgBodyV1),
+    RoomJoinV1(dto::RoomJoinMsgBodyV1),
 
     #[serde(rename = "room::join_ack/v1")]
     RoomJoinAckV1,
@@ -240,31 +249,31 @@ pub enum MessageBody {
     RoomLeaveAckV1,
 
     #[serde(rename = "room::disconnected/v1")]
-    RoomDisconnectedV1(RoomDisconnectedMsgBodyV1),
+    RoomDisconnectedV1(dto::RoomDisconnectedMsgBodyV1),
 
     #[serde(rename = "room::request_state/v1")]
     RoomRequestStateV1,
 
     #[serde(rename = "room::state/v1")]
-    RoomStateV1(RoomStateMsgBodyV1),
+    RoomStateV1(dto::RoomStateMsgBodyV1),
 
     #[serde(rename = "room::request_permissions/v1")]
     RoomRequestPermissionsV1,
 
     #[serde(rename = "room::set_user_role/v1")]
-    RoomSetUserRole(RoomSetUserRoleMsgBodyV1),
+    RoomSetUserRole(dto::RoomSetUserRoleMsgBodyV1),
 
     #[serde(rename = "room::kick_user/v1")]
-    RoomKickUser(RoomKickUserMsgBodyV1),
+    RoomKickUser(dto::RoomKickUserMsgBodyV1),
 
     #[serde(rename = "room::permissions/v1")]
-    RoomPermissionsV1(RoomPermissionsMsgBodyV1),
+    RoomPermissionsV1(dto::RoomPermissionsMsgBodyV1),
 
     #[serde(rename = "playback::available/v1")]
-    PlaybackAvailableV1(PlaybackAvailableMsgBodyV1),
+    PlaybackAvailableV1(dto::PlaybackAvailableMsgBodyV1),
 
     #[serde(rename = "playback::request_start/v1")]
-    PlaybackRequestStartV1(PlaybackStartMsgBodyV1),
+    PlaybackRequestStartV1(dto::PlaybackStartMsgBodyV1),
 
     #[serde(rename = "playback::started/v1")]
     PlaybackStartedV1,
@@ -276,19 +285,19 @@ pub enum MessageBody {
     PlaybackConnectedV1,
 
     #[serde(rename = "playback::sync/v1")]
-    PlaybackSyncV1(PlaybackSyncMsgBodyV1),
+    PlaybackSyncV1(dto::PlaybackSyncMsgBodyV1),
 
     #[serde(rename = "playback::request_stop/v1")]
     PlaybackRequestStopV1,
 
     #[serde(rename = "playback::stopped/v1")]
-    PlaybackStoppedV1(PlaybackStoppedMsgBodyV1),
+    PlaybackStoppedV1(dto::PlaybackStoppedMsgBodyV1),
 
     #[serde(rename = "playback::request_disconnect/v1")]
     PlaybackRequestDisconnectV1,
 
     #[serde(rename = "playback::disconnected/v1")]
-    PlaybackDisconnectedV1(PlaybackDisconnectedMsgBodyV1),
+    PlaybackDisconnectedV1(dto::PlaybackDisconnectedMsgBodyV1),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

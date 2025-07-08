@@ -6,12 +6,26 @@ use tokio::{
     sync::mpsc::{self},
     task::JoinHandle,
 };
-use uuid::Uuid;
+
+id_type!(RoomId);
+
+impl From<dto::RoomIdV1> for RoomId {
+    fn from(value: dto::RoomIdV1) -> Self {
+        Self::from(*value)
+    }
+}
+
+impl From<RoomId> for dto::RoomIdV1 {
+    fn from(value: RoomId) -> Self {
+        Self::from(*value)
+    }
+}
 
 use crate::{
-    messages::{RoomUserPermissionsV1, RoomUserRoleV1},
+    id_type,
+    messages::dto,
     playback::{Playback, PlaybackInfo, PlaybackSource, PlaybackState},
-    session::{SessionHandle, SessionMsg},
+    session::{SessionHandle, SessionId, SessionMsg},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,22 +41,22 @@ impl UserRole {
     }
 }
 
-impl From<RoomUserRoleV1> for UserRole {
-    fn from(value: RoomUserRoleV1) -> Self {
+impl From<dto::RoomUserRoleV1> for UserRole {
+    fn from(value: dto::RoomUserRoleV1) -> Self {
         match value {
-            RoomUserRoleV1::Host => UserRole::Host,
-            RoomUserRoleV1::Guest => UserRole::Guest,
-            RoomUserRoleV1::Spectator => UserRole::Spectator,
+            dto::RoomUserRoleV1::Host => UserRole::Host,
+            dto::RoomUserRoleV1::Guest => UserRole::Guest,
+            dto::RoomUserRoleV1::Spectator => UserRole::Spectator,
         }
     }
 }
 
-impl From<UserRole> for RoomUserRoleV1 {
+impl From<UserRole> for dto::RoomUserRoleV1 {
     fn from(value: UserRole) -> Self {
         match value {
-            UserRole::Host => RoomUserRoleV1::Host,
-            UserRole::Guest => RoomUserRoleV1::Guest,
-            UserRole::Spectator => RoomUserRoleV1::Spectator,
+            UserRole::Host => dto::RoomUserRoleV1::Host,
+            UserRole::Guest => dto::RoomUserRoleV1::Guest,
+            UserRole::Spectator => dto::RoomUserRoleV1::Spectator,
         }
     }
 }
@@ -80,7 +94,7 @@ impl From<UserRole> for UserPermissions {
     }
 }
 
-impl From<UserPermissions> for RoomUserPermissionsV1 {
+impl From<UserPermissions> for dto::RoomUserPermissionsV1 {
     fn from(value: UserPermissions) -> Self {
         Self {
             can_close: value.can_close,
@@ -118,13 +132,13 @@ struct User {
 #[derive(Debug, Clone)]
 pub enum RoomMsg {
     RequestState,
-    SetRole(Uuid, UserRole),
-    PlaybackStart(Uuid, PlaybackSource),
-    PlaybackStop(Uuid),
-    PlaybackConnect(Uuid),
-    PlaybackDisconnect(Uuid),
+    SetRole(SessionId, UserRole),
+    PlaybackStart(SessionId, PlaybackSource),
+    PlaybackStop(SessionId),
+    PlaybackConnect(SessionId),
+    PlaybackDisconnect(SessionId),
     PlaybackSync(PlaybackState),
-    Leave(Uuid),
+    Leave(SessionId),
 }
 
 #[derive(Debug)]
@@ -158,7 +172,7 @@ impl RoomController {
 
 #[derive(Debug)]
 pub struct RoomHandle {
-    pub id: Uuid,
+    pub id: RoomId,
     pub role: UserRole,
     message_tx: mpsc::WeakSender<RoomMsg>,
 }
@@ -175,26 +189,48 @@ impl RoomHandle {
 
 #[derive(Debug, Clone)]
 pub struct UserData {
-    pub id: Uuid,
+    pub id: SessionId,
     pub name: String,
     pub role: UserRole,
 }
 
+impl From<UserData> for dto::RoomUserV1 {
+    fn from(value: UserData) -> Self {
+        Self {
+            id: value.id.into(),
+            name: value.name,
+            role: value.role.into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct RoomState {
-    pub id: Uuid,
+    pub id: RoomId,
     pub name: String,
     pub password: String,
     pub playback_info: Option<PlaybackInfo>,
     pub users: Vec<UserData>,
 }
 
+impl From<RoomState> for dto::RoomStateMsgBodyV1 {
+    fn from(value: RoomState) -> Self {
+        Self {
+            id: value.id.into(),
+            name: value.name,
+            password: value.password,
+            users: value.users.into_iter().map(From::from).collect(),
+            playback_info: value.playback_info.map(From::from),
+        }
+    }
+}
+
 struct Room {
-    id: Uuid,
+    id: RoomId,
     running: bool,
     name: String,
     password: String,
-    users: HashMap<Uuid, User>,
+    users: HashMap<SessionId, User>,
     playback: Option<Playback>,
     command_rx: mpsc::Receiver<RoomCmd>,
     message_rx: mpsc::Receiver<RoomMsg>,
@@ -208,7 +244,7 @@ impl Room {
         message_rx: mpsc::Receiver<RoomMsg>,
     ) -> Self {
         Self {
-            id: Uuid::new_v4(),
+            id: RoomId::new(),
             running: true,
             name,
             password,
@@ -237,7 +273,7 @@ impl Room {
         }
     }
 
-    fn create(name: String, password: String) -> (Uuid, RoomController) {
+    fn create(name: String, password: String) -> (RoomId, RoomController) {
         let (command_tx, command_rx) = mpsc::channel::<RoomCmd>(8);
         let (message_tx, message_rx) = mpsc::channel::<RoomMsg>(32);
 
@@ -256,7 +292,7 @@ impl Room {
         (room_id, controller)
     }
 
-    async fn send_user_msg(&mut self, id: Uuid, msg: SessionMsg) -> anyhow::Result<()> {
+    async fn send_user_msg(&mut self, id: SessionId, msg: SessionMsg) -> anyhow::Result<()> {
         let Some(user) = self.users.get(&id) else {
             return Ok(());
         };
@@ -266,7 +302,7 @@ impl Room {
         Ok(())
     }
 
-    fn user_ids(&self) -> Vec<Uuid> {
+    fn user_ids(&self) -> Vec<SessionId> {
         self.users.keys().copied().collect()
     }
 
@@ -284,7 +320,7 @@ impl Room {
             .await;
     }
 
-    async fn leave(&mut self, session_id: Uuid) {
+    async fn leave(&mut self, session_id: SessionId) {
         self.users.remove(&session_id);
         if self.users.is_empty() {
             // Close the room if it has no users
@@ -308,8 +344,8 @@ impl Room {
         self.broadcast_state().await;
     }
 
-    fn choose_new_host_id(&mut self) -> Option<Uuid> {
-        let mut new_host_id: Option<Uuid> = None;
+    fn choose_new_host_id(&mut self) -> Option<SessionId> {
+        let mut new_host_id: Option<SessionId> = None;
         for (id, user) in &self.users {
             if matches!(user.role, UserRole::Host | UserRole::Guest) {
                 return Some(*id);
@@ -319,7 +355,7 @@ impl Room {
         new_host_id
     }
 
-    async fn start_playback(&mut self, session_id: Uuid, source: PlaybackSource) {
+    async fn start_playback(&mut self, session_id: SessionId, source: PlaybackSource) {
         todo!()
     }
 
@@ -344,7 +380,7 @@ impl Room {
         Ok(())
     }
 
-    async fn set_role(&mut self, role: UserRole, session_id: Uuid) {
+    async fn set_role(&mut self, role: UserRole, session_id: SessionId) {
         let Some(user) = self.users.get_mut(&session_id) else {
             return;
         };
@@ -396,7 +432,7 @@ impl Room {
 }
 
 pub struct RoomManager {
-    room_controllers: HashMap<Uuid, RoomController>,
+    room_controllers: HashMap<RoomId, RoomController>,
 }
 
 impl RoomManager {
@@ -432,14 +468,14 @@ impl RoomManager {
         })
     }
 
-    pub fn get_room_password(&self, id: Uuid) -> Option<String> {
+    pub fn get_room_password(&self, id: RoomId) -> Option<String> {
         let controller = self.room_controllers.get(&id)?;
         Some(controller.password.clone())
     }
 
     pub async fn join_room(
         &mut self,
-        id: Uuid,
+        id: RoomId,
         session: SessionHandle,
     ) -> anyhow::Result<Option<RoomHandle>> {
         // TODO: it's probably not the best idea to assume we trust anyone who joins the room, but
@@ -460,7 +496,7 @@ impl RoomManager {
         }))
     }
 
-    pub async fn close_room(&mut self, id: Uuid, reason: RoomCloseReason) -> anyhow::Result<()> {
+    pub async fn close_room(&mut self, id: RoomId, reason: RoomCloseReason) -> anyhow::Result<()> {
         let Some(controller) = self.room_controllers.remove(&id) else {
             return Ok(());
         };

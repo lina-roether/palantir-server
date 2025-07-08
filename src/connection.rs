@@ -19,10 +19,7 @@ use tokio_tungstenite::WebSocketStream;
 
 use crate::{
     api_access::{ApiAccessManager, ApiPermissions},
-    messages::{
-        ConnectionClientErrorMsgBodyV1, ConnectionClosedMsgBodyV1, ConnectionClosedReasonV1,
-        Message, MessageBody, MessageChannel,
-    },
+    messages::{dto, Message, MessageBody, MessageChannel},
     utils::timestamp,
 };
 
@@ -137,6 +134,15 @@ pub enum CloseReason {
     Unauthorized,
 }
 
+impl From<CloseReason> for dto::ConnectionClosedReasonV1 {
+    fn from(value: CloseReason) -> Self {
+        match value {
+            CloseReason::ServerError => dto::ConnectionClosedReasonV1::ServerError,
+            CloseReason::Unauthorized => dto::ConnectionClosedReasonV1::Unauthorized,
+        }
+    }
+}
+
 impl Connection {
     const LOGIN_TIMEOUT: Duration = Duration::from_secs(3);
     const PING_TIMEOUT: Duration = Duration::from_secs(5);
@@ -217,7 +223,7 @@ impl Connection {
     pub async fn send_error(&mut self, message: impl Display) {
         let _ = self
             .send(Message::new(MessageBody::ConnectionClientErrorV1(
-                ConnectionClientErrorMsgBodyV1 {
+                dto::ConnectionClientErrorMsgBodyV1 {
                     message: message.to_string(),
                 },
             )))
@@ -347,11 +353,8 @@ impl Connection {
         }
         let result = self
             .send(Message::new(MessageBody::ConnectionClosedV1(
-                ConnectionClosedMsgBodyV1 {
-                    reason: match reason {
-                        CloseReason::ServerError => ConnectionClosedReasonV1::ServerError,
-                        CloseReason::Unauthorized => ConnectionClosedReasonV1::Unauthorized,
-                    },
+                dto::ConnectionClosedMsgBodyV1 {
+                    reason: reason.into(),
                     message: message.to_string(),
                 },
             )))

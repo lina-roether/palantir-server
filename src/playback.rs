@@ -1,28 +1,24 @@
 use std::collections::HashMap;
 
 use anyhow::{anyhow, Context};
-use uuid::Uuid;
 
 use crate::{
-    messages::{
-        PlaybackDisconnectReasonV1, PlaybackSourceV1, PlaybackStateV1, PlaybackStopReasonV1,
-        RoomPlaybackInfoV1,
-    },
-    session::{SessionHandle, SessionMsg},
+    messages::dto,
+    session::{SessionHandle, SessionId, SessionMsg},
 };
 
 #[derive(Debug, Clone)]
 pub struct PlaybackInfo {
-    pub user_id: Uuid,
+    pub user_id: SessionId,
     pub user_name: String,
     pub title: String,
     pub href: String,
 }
 
-impl From<PlaybackInfo> for RoomPlaybackInfoV1 {
+impl From<PlaybackInfo> for dto::RoomPlaybackInfoV1 {
     fn from(value: PlaybackInfo) -> Self {
         Self {
-            user_id: value.user_id,
+            user_id: value.user_id.into(),
             user_name: value.user_name,
             title: value.title,
             href: value.href,
@@ -38,7 +34,7 @@ pub struct PlaybackSource {
     pub element_query: String,
 }
 
-impl From<PlaybackSource> for PlaybackSourceV1 {
+impl From<PlaybackSource> for dto::PlaybackSourceV1 {
     fn from(value: PlaybackSource) -> Self {
         Self {
             title: value.title,
@@ -72,8 +68,8 @@ impl PlaybackState {
     }
 }
 
-impl From<PlaybackStateV1> for PlaybackState {
-    fn from(value: PlaybackStateV1) -> Self {
+impl From<dto::PlaybackStateV1> for PlaybackState {
+    fn from(value: dto::PlaybackStateV1) -> Self {
         Self {
             timestamp: value.timestamp,
             playing: value.playing,
@@ -82,7 +78,7 @@ impl From<PlaybackStateV1> for PlaybackState {
     }
 }
 
-impl From<PlaybackState> for PlaybackStateV1 {
+impl From<PlaybackState> for dto::PlaybackStateV1 {
     fn from(value: PlaybackState) -> Self {
         Self {
             timestamp: value.timestamp,
@@ -98,7 +94,7 @@ pub enum StopReason {
     StoppedByHost,
 }
 
-impl From<StopReason> for PlaybackStopReasonV1 {
+impl From<StopReason> for dto::PlaybackStopReasonV1 {
     fn from(value: StopReason) -> Self {
         match value {
             StopReason::HostError => Self::HostError,
@@ -113,7 +109,7 @@ pub enum DisconnectReason {
     SubscriberError,
 }
 
-impl From<DisconnectReason> for PlaybackDisconnectReasonV1 {
+impl From<DisconnectReason> for dto::PlaybackDisconnectReasonV1 {
     fn from(value: DisconnectReason) -> Self {
         match value {
             DisconnectReason::Stopped(reason) => Self::Stopped(reason.into()),
@@ -127,7 +123,7 @@ pub struct Playback {
     running: bool,
     source: PlaybackSource,
     host: SessionHandle,
-    subscribers: HashMap<Uuid, SessionHandle>,
+    subscribers: HashMap<SessionId, SessionHandle>,
 }
 
 impl Playback {
@@ -191,7 +187,11 @@ impl Playback {
         Ok(())
     }
 
-    pub async fn disconnect(&mut self, id: Uuid, reason: DisconnectReason) -> anyhow::Result<()> {
+    pub async fn disconnect(
+        &mut self,
+        id: SessionId,
+        reason: DisconnectReason,
+    ) -> anyhow::Result<()> {
         if let Some(handle) = self.subscribers.remove(&id) {
             handle
                 .send_message(SessionMsg::PlaybackDisconnected(reason))
@@ -200,7 +200,7 @@ impl Playback {
         Ok(())
     }
 
-    pub async fn sync(&mut self, id: Uuid, state: PlaybackState) -> anyhow::Result<()> {
+    pub async fn sync(&mut self, id: SessionId, state: PlaybackState) -> anyhow::Result<()> {
         let mut normalized_state = state.clone();
         if id == self.host.id {
             normalized_state = state.normalize_offset(self.host.time_offset());
@@ -212,7 +212,7 @@ impl Playback {
             self.stop(StopReason::StoppedByHost).await?;
             return Ok(());
         }
-        let mut errored_subscribers: Vec<Uuid> = vec![];
+        let mut errored_subscribers: Vec<SessionId> = vec![];
         for target in self.subscribers.values() {
             if target.id == id {
                 continue;
