@@ -109,14 +109,14 @@ impl From<StopReason> for PlaybackStopReasonV1 {
 
 #[derive(Debug, Clone, Copy)]
 pub enum DisconnectReason {
-    Stopped,
+    Stopped(StopReason),
     SubscriberError,
 }
 
 impl From<DisconnectReason> for PlaybackDisconnectReasonV1 {
     fn from(value: DisconnectReason) -> Self {
         match value {
-            DisconnectReason::Stopped => Self::Stopped,
+            DisconnectReason::Stopped(reason) => Self::Stopped(reason.into()),
             DisconnectReason::SubscriberError => Self::SubscriberError,
         }
     }
@@ -168,7 +168,9 @@ impl Playback {
         }
         for subscriber in self.subscribers.values() {
             subscriber
-                .send_message(SessionMsg::PlaybackDisconnected(DisconnectReason::Stopped))
+                .send_message(SessionMsg::PlaybackDisconnected(DisconnectReason::Stopped(
+                    reason,
+                )))
                 .await?;
         }
         self.subscribers.clear();

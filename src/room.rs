@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use crate::{
     messages::{RoomUserPermissionsV1, RoomUserRoleV1},
-    playback::{Playback, PlaybackInfo},
+    playback::{Playback, PlaybackInfo, PlaybackSource, PlaybackState},
     session::{SessionHandle, SessionMsg},
 };
 
@@ -119,6 +119,11 @@ struct User {
 pub enum RoomMsg {
     RequestState,
     SetRole(Uuid, UserRole),
+    PlaybackStart(Uuid, PlaybackSource),
+    PlaybackStop(Uuid),
+    PlaybackConnect(Uuid),
+    PlaybackDisconnect(Uuid),
+    PlaybackSync(PlaybackState),
     Leave(Uuid),
 }
 
@@ -314,11 +319,19 @@ impl Room {
         new_host_id
     }
 
+    async fn start_playback(&mut self, session_id: Uuid, source: PlaybackSource) {
+        todo!()
+    }
+
     async fn handle_msg(&mut self, msg: RoomMsg) {
         match msg {
             RoomMsg::RequestState => self.broadcast_state().await,
             RoomMsg::SetRole(session_id, role) => self.set_role(role, session_id).await,
             RoomMsg::Leave(session_id) => self.leave(session_id).await,
+            RoomMsg::PlaybackStart(session_id, source) => {
+                self.start_playback(session_id, source).await
+            }
+            _ => todo!(),
         }
     }
 

@@ -178,11 +178,11 @@ pub struct PlaybackStoppedMsgBodyV1 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PlaybackDisconnectReasonV1 {
-    #[serde(rename = "stopped")]
-    Stopped,
-
     #[serde(rename = "subscriber_error")]
     SubscriberError,
+
+    #[serde(untagged)]
+    Stopped(PlaybackStopReasonV1),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
