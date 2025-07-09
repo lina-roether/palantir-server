@@ -39,6 +39,7 @@ use crate::{
 pub enum SessionMsg {
     RoomState(RoomState),
     RoomClosed(RoomCloseReason),
+    PlaybackHosting,
     PlaybackAvailable(PlaybackInfo),
     PlaybackStarted,
     PlaybackConnected,
@@ -371,6 +372,7 @@ impl Session {
         let result = match msg {
             SessionMsg::RoomState(state) => self.send_room_state(state).await,
             SessionMsg::RoomClosed(reason) => self.room_closed(reason).await,
+            SessionMsg::PlaybackHosting => self.send_message(MessageBody::PlaybackHosting).await,
             SessionMsg::PlaybackAvailable(info) => {
                 self.send_message(MessageBody::PlaybackAvailableV1(
                     dto::PlaybackAvailableMsgBodyV1 { info: info.into() },

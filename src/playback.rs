@@ -4,7 +4,6 @@ use anyhow::{anyhow, Context};
 
 use crate::{
     messages::dto,
-    room::UserData,
     session::{SessionHandle, SessionId, SessionMsg},
 };
 
@@ -104,6 +103,7 @@ impl From<StopReason> for dto::PlaybackStopReasonV1 {
 
 #[derive(Debug, Clone, Copy)]
 pub enum DisconnectReason {
+    User,
     Stopped(StopReason),
     SubscriberError,
 }
@@ -111,10 +111,19 @@ pub enum DisconnectReason {
 impl From<DisconnectReason> for dto::PlaybackDisconnectReasonV1 {
     fn from(value: DisconnectReason) -> Self {
         match value {
+            DisconnectReason::User => Self::User,
             DisconnectReason::Stopped(reason) => Self::Stopped(reason.into()),
             DisconnectReason::SubscriberError => Self::SubscriberError,
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub enum PlaybackRequest {
+    Start(PlaybackSource),
+    Disconnect(DisconnectReason),
+    Stop(StopReason),
+    Sync(PlaybackState),
 }
 
 #[derive(Debug, Clone)]
@@ -142,15 +151,55 @@ impl Playback {
         }
     }
 
-    pub async fn start(&mut self) -> anyhow::Result<()> {
+    pub async fn handle_request(
+        &mut self,
+        session_id: SessionId,
+        request: PlaybackRequest,
+    ) -> anyhow::Result<()> {
+        let is_host = session_id == self.host.id;
+        if !is_host && !self.subscribers.contains_key(&session_id) {
+            return Err(anyhow!("Users who are neither the playback host nor a subscriber cannot send playback requests"));
+        };
+
+        match request {
+            PlaybackRequest::Start(source) => {
+                if !is_host {
+                    return Err(anyhow!("Only the playback host can start playback"));
+                }
+                self.start(source).await?;
+            }
+            PlaybackRequest::Disconnect(reason) => self.disconnect(session_id, reason).await?,
+            PlaybackRequest::Stop(reason) => {
+                if !is_host {
+                    return Err(anyhow!("Only the playback host can stop playback"));
+                }
+                self.stop(reason).await?;
+            }
+            PlaybackRequest::Sync(state) => self.sync(session_id, state).await?,
+        }
+
+        Ok(())
+    }
+
+    async fn start(&mut self, source: PlaybackSource) -> anyhow::Result<()> {
         if self.running {
             return Ok(());
         }
         self.running = true;
+        self.source = Some(source);
         if !self.host.send_message(SessionMsg::PlaybackStarted).await? {
             self.stop(StopReason::HostError)
                 .await
                 .context("Failed to stop playback after host error")?;
+        }
+
+        for (id, subscriber) in &self.subscribers {
+            if let Err(err) = subscriber
+                .send_message(SessionMsg::PlaybackAvailable(self.get_info()))
+                .await
+            {
+                log::error!("Failed to announce playback to user {id}: {err:?}");
+            }
         }
         Ok(())
     }
@@ -159,6 +208,7 @@ impl Playback {
         if !self.running {
             return Ok(());
         }
+        self.source = None;
         for subscriber in self.subscribers.values() {
             subscriber
                 .send_message(SessionMsg::PlaybackDisconnected(DisconnectReason::Stopped(
@@ -173,22 +223,23 @@ impl Playback {
         Ok(())
     }
 
-    pub async fn connect(&mut self, handle: SessionHandle) -> anyhow::Result<()> {
+    pub async fn connect(&mut self, user: SessionHandle) -> anyhow::Result<()> {
         if !self.running {
             return Err(anyhow!(
                 "Tried to connect to a playback that isn't running!"
             ));
         }
-        handle.send_message(SessionMsg::PlaybackConnected).await?;
-        self.subscribers.insert(handle.id, handle);
+        if user.id == self.host.id {
+            return Err(anyhow!(
+                "The playback host can't connect to their own playback"
+            ));
+        }
+        user.send_message(SessionMsg::PlaybackConnected).await?;
+        self.subscribers.insert(user.id, user);
         Ok(())
     }
 
-    pub async fn disconnect(
-        &mut self,
-        id: SessionId,
-        reason: DisconnectReason,
-    ) -> anyhow::Result<()> {
+    async fn disconnect(&mut self, id: SessionId, reason: DisconnectReason) -> anyhow::Result<()> {
         if let Some(handle) = self.subscribers.remove(&id) {
             handle
                 .send_message(SessionMsg::PlaybackDisconnected(reason))
@@ -197,7 +248,7 @@ impl Playback {
         Ok(())
     }
 
-    pub async fn sync(&mut self, id: SessionId, state: PlaybackState) -> anyhow::Result<()> {
+    async fn sync(&mut self, id: SessionId, state: PlaybackState) -> anyhow::Result<()> {
         let mut normalized_state = state.clone();
         if id == self.host.id {
             normalized_state = state.normalize_offset(self.host.time_offset());
@@ -214,7 +265,7 @@ impl Playback {
             if target.id == id {
                 continue;
             }
-            if !send_sync_msg(target, &normalized_state).await? {
+            if !send_sync_msg(&target, &normalized_state).await? {
                 errored_subscribers.push(target.id);
             }
         }

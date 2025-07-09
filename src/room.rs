@@ -24,7 +24,9 @@ impl From<RoomId> for dto::RoomIdV1 {
 use crate::{
     id_type,
     messages::dto,
-    playback::{Playback, PlaybackInfo, PlaybackSource, PlaybackState, StopReason},
+    playback::{
+        Playback, PlaybackInfo, PlaybackRequest, PlaybackSource, PlaybackState, StopReason,
+    },
     session::{SessionHandle, SessionId, SessionMsg},
 };
 
@@ -63,7 +65,7 @@ impl From<UserRole> for dto::RoomUserRoleV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UserPermissions {
-    pub can_share: bool,
+    pub can_host: bool,
     pub can_set_roles: bool,
     pub can_kick: bool,
     pub can_close: bool,
@@ -73,19 +75,19 @@ impl From<UserRole> for UserPermissions {
     fn from(value: UserRole) -> Self {
         match value {
             UserRole::Host => Self {
-                can_share: true,
+                can_host: true,
                 can_set_roles: true,
                 can_kick: true,
                 can_close: true,
             },
             UserRole::Guest => Self {
-                can_share: true,
+                can_host: true,
                 can_set_roles: false,
                 can_kick: false,
                 can_close: false,
             },
             UserRole::Spectator => Self {
-                can_share: false,
+                can_host: false,
                 can_set_roles: false,
                 can_kick: false,
                 can_close: false,
@@ -98,7 +100,7 @@ impl From<UserPermissions> for dto::RoomUserPermissionsV1 {
     fn from(value: UserPermissions) -> Self {
         Self {
             can_close: value.can_close,
-            can_share: value.can_share,
+            can_host: value.can_host,
             can_set_roles: value.can_set_roles,
             can_kick: value.can_kick,
         }
@@ -133,13 +135,10 @@ pub struct User {
 pub enum RoomRequest {
     GetState,
     SetRole(SessionId, UserRole),
-    PlaybackHost(SessionId),
-    PlaybackStart(PlaybackSource),
-    PlaybackConnect(SessionId),
-    PlaybackDisconnect(SessionId),
-    PlaybackStop(SessionId),
-    PlaybackSync(PlaybackState),
     Leave(SessionId),
+    PlaybackHost(SessionId),
+    PlaybackConnect(SessionId),
+    Playback(SessionId, PlaybackRequest),
 }
 
 #[derive(Debug)]
@@ -387,7 +386,7 @@ impl Room {
         new_host_id
     }
 
-    async fn host_playback(&mut self, session_id: SessionId) {
+    async fn host_playback(&mut self, session_id: SessionId) -> anyhow::Result<()> {
         if let Some(mut playback) = self.playback.take() {
             if let Err(err) = playback.stop(StopReason::Superseded).await {
                 log::error!("Failed to stop existing playback: {err}");
@@ -395,11 +394,45 @@ impl Room {
         }
 
         let Some(host) = self.users.get(&session_id) else {
-            log::error!("An unknown user tried to host a playback!");
-            return;
+            return Err(anyhow!("Unknown user"));
         };
 
-        todo!()
+        if !host.role.permissions().can_host {
+            return Err(anyhow!("Missing permissions to host playback"));
+        }
+
+        self.playback = Some(Playback::new(host.session.clone()));
+
+        self.send_user_msg(host.session.id, SessionMsg::PlaybackHosting)
+            .await?;
+
+        Ok(())
+    }
+
+    async fn connect_playback(&mut self, session_id: SessionId) -> anyhow::Result<()> {
+        let Some(playback) = &mut self.playback else {
+            return Err(anyhow!("No active playback"));
+        };
+
+        let Some(subscriber) = self.users.get(&session_id) else {
+            return Err(anyhow!("Unkown user"));
+        };
+
+        playback.connect(subscriber.session.clone()).await?;
+
+        Ok(())
+    }
+
+    async fn playback_request(
+        &mut self,
+        session_id: SessionId,
+        request: PlaybackRequest,
+    ) -> anyhow::Result<()> {
+        let Some(playback) = &mut self.playback else {
+            return Err(anyhow!("No active playback"));
+        };
+
+        playback.handle_request(session_id, request).await
     }
 
     async fn handle_request(&mut self, request: RoomRequest) {
@@ -410,7 +443,11 @@ impl Room {
                 self.leave(session_id).await;
                 Ok(())
             }
-            _ => todo!(),
+            RoomRequest::PlaybackHost(session_id) => self.host_playback(session_id).await,
+            RoomRequest::PlaybackConnect(session_id) => self.connect_playback(session_id).await,
+            RoomRequest::Playback(session_id, request) => {
+                self.playback_request(session_id, request).await
+            }
         };
         if let Err(err) = self.result_tx.send(result) {
             log::error!("Failed to send room request result: {err:?}");

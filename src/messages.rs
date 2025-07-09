@@ -74,7 +74,7 @@ pub mod dto {
 
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
     pub struct RoomUserPermissionsV1 {
-        pub can_share: bool,
+        pub can_host: bool,
         pub can_close: bool,
         pub can_set_roles: bool,
         pub can_kick: bool,
@@ -187,6 +187,9 @@ pub mod dto {
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
     pub enum PlaybackDisconnectReasonV1 {
+        #[serde(rename = "user")]
+        User,
+
         #[serde(rename = "subscriber_error")]
         SubscriberError,
 
@@ -275,6 +278,9 @@ pub enum MessageBody {
 
     #[serde(rename = "playback::request_host/v1")]
     PlaybackRequestHostV1,
+
+    #[serde(rename = "playback::hosting/v1")]
+    PlaybackHosting,
 
     #[serde(rename = "playback::request_start/v1")]
     PlaybackRequestStartV1(dto::PlaybackStartMsgBodyV1),
