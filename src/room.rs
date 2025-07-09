@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use anyhow::{anyhow, Context};
 use log::error;
 use tokio::{
-    sync::mpsc::{self},
+    sync::{mpsc, watch},
     task::JoinHandle,
 };
 
@@ -144,24 +144,31 @@ pub enum RoomMsg {
 
 #[derive(Debug)]
 struct RoomController {
+    id: RoomId,
     password: String,
     command_tx: mpsc::Sender<RoomCmd>,
     message_tx: mpsc::Sender<RoomMsg>,
+    result_rx: watch::Receiver<anyhow::Result<()>>,
     join_handle: JoinHandle<()>,
 }
 
 impl RoomController {
-    fn message_sender(&self) -> mpsc::WeakSender<RoomMsg> {
-        self.message_tx.clone().downgrade()
+    fn id(&self) -> RoomId {
+        self.id
     }
 
-    async fn join(
-        &mut self,
-        role: UserRole,
-        session: SessionHandle,
-    ) -> anyhow::Result<mpsc::WeakSender<RoomMsg>> {
+    fn handle(&self, role: UserRole) -> RoomHandle {
+        RoomHandle {
+            id: self.id,
+            role,
+            message_tx: self.message_tx.clone().downgrade(),
+            result_rx: self.result_rx.clone(),
+        }
+    }
+
+    async fn join(&mut self, role: UserRole, session: SessionHandle) -> anyhow::Result<RoomHandle> {
         self.command_tx.send(RoomCmd::Join(role, session)).await?;
-        Ok(self.message_sender())
+        Ok(self.handle(role))
     }
 
     async fn close(self, reason: RoomCloseReason) -> anyhow::Result<()> {
@@ -176,14 +183,21 @@ pub struct RoomHandle {
     pub id: RoomId,
     pub role: UserRole,
     message_tx: mpsc::WeakSender<RoomMsg>,
+    result_rx: watch::Receiver<anyhow::Result<()>>,
 }
 
 impl RoomHandle {
-    pub async fn send_message(&self, msg: RoomMsg) -> anyhow::Result<bool> {
+    pub async fn send_message(&mut self, msg: RoomMsg) -> anyhow::Result<bool> {
         let Some(message_tx) = self.message_tx.upgrade() else {
             return Ok(false);
         };
         message_tx.send(msg).await?;
+        self.result_rx.changed().await?;
+        if let Err(err) = &*self.result_rx.borrow_and_update() {
+            // anyhow's errors aren't clonable... not ideal, but works
+            return Err(anyhow!("{err:?}"));
+        }
+
         Ok(true)
     }
 }
@@ -235,6 +249,7 @@ struct Room {
     playback: Option<Playback>,
     command_rx: mpsc::Receiver<RoomCmd>,
     message_rx: mpsc::Receiver<RoomMsg>,
+    result_tx: watch::Sender<anyhow::Result<()>>,
 }
 
 impl Room {
@@ -243,6 +258,7 @@ impl Room {
         password: String,
         command_rx: mpsc::Receiver<RoomCmd>,
         message_rx: mpsc::Receiver<RoomMsg>,
+        result_tx: watch::Sender<anyhow::Result<()>>,
     ) -> Self {
         Self {
             id: RoomId::new(),
@@ -251,6 +267,7 @@ impl Room {
             password,
             command_rx,
             message_rx,
+            result_tx,
             playback: None,
             users: HashMap::new(),
         }
@@ -274,23 +291,32 @@ impl Room {
         }
     }
 
-    fn create(name: String, password: String) -> (RoomId, RoomController) {
+    fn create(name: String, password: String) -> RoomController {
         let (command_tx, command_rx) = mpsc::channel::<RoomCmd>(8);
         let (message_tx, message_rx) = mpsc::channel::<RoomMsg>(32);
+        let (message_result_tx, message_result_rx) = watch::channel::<anyhow::Result<()>>(Ok(()));
 
-        let mut room = Room::new(name, password.clone(), command_rx, message_rx);
+        let mut room = Room::new(
+            name,
+            password.clone(),
+            command_rx,
+            message_rx,
+            message_result_tx,
+        );
         let room_id = room.id;
 
         let join_handle = tokio::spawn(async move { room.run().await });
 
         let controller = RoomController {
+            id: room_id,
             password,
             command_tx,
             message_tx,
+            result_rx: message_result_rx,
             join_handle,
         };
 
-        (room_id, controller)
+        controller
     }
 
     async fn send_user_msg(&mut self, id: SessionId, msg: SessionMsg) -> anyhow::Result<()> {
@@ -307,25 +333,31 @@ impl Room {
         self.users.keys().copied().collect()
     }
 
-    async fn broadcast_msg(&mut self, msg: SessionMsg) {
+    async fn broadcast_msg(&mut self, msg: SessionMsg) -> anyhow::Result<()> {
+        let mut result = Ok(());
         for id in self.user_ids() {
-            let result = self.send_user_msg(id, msg.clone()).await;
-            if let Some(err) = result.err() {
+            if let Err(err) = self.send_user_msg(id, msg.clone()).await {
                 error!("Failed to broadcast message to user {id}: {err:?}");
+                if result.is_ok() {
+                    result = Err(anyhow!("Failed to broadcast message to one or more users"))
+                }
             }
         }
+        result
     }
 
-    async fn broadcast_state(&mut self) {
+    async fn broadcast_state(&mut self) -> anyhow::Result<()> {
         self.broadcast_msg(SessionMsg::RoomState(self.get_state()))
-            .await;
+            .await
     }
 
     async fn leave(&mut self, session_id: SessionId) {
         self.users.remove(&session_id);
         if self.users.is_empty() {
             // Close the room if it has no users
-            self.close(RoomCloseReason::ClosedByHost).await;
+            if let Err(err) = self.close(RoomCloseReason::ClosedByHost).await {
+                log::error!("Error while closing empty room: {err:?}");
+            }
             return;
         }
         if self
@@ -334,15 +366,20 @@ impl Room {
             .all(|(_, user)| user.role != UserRole::Host)
         {
             let Some(new_host_id) = self.choose_new_host_id() else {
-                log::debug!(
-                    "failed to choose a new host id in session {session_id}! closing the room!"
+                log::error!(
+                    "Failed to choose a new host id in session {session_id}! closing the room!"
                 );
-                self.close(RoomCloseReason::ServerError).await;
+                let _ = self.close(RoomCloseReason::ServerError).await;
                 return;
             };
-            self.set_role(UserRole::Host, new_host_id).await;
+            if let Err(err) = self.set_role(UserRole::Host, new_host_id).await {
+                log::error!("Failed to set new room host: {err:?}");
+                let _ = self.close(RoomCloseReason::ServerError).await;
+            }
         }
-        self.broadcast_state().await;
+        if let Err(err) = self.broadcast_state().await {
+            log::error!("Failed to broadcast state after leaving the room: {err}");
+        }
     }
 
     fn choose_new_host_id(&mut self) -> Option<SessionId> {
@@ -372,11 +409,17 @@ impl Room {
     }
 
     async fn handle_msg(&mut self, msg: RoomMsg) {
-        match msg {
+        let result = match msg {
             RoomMsg::RequestState => self.broadcast_state().await,
             RoomMsg::SetRole(session_id, role) => self.set_role(role, session_id).await,
-            RoomMsg::Leave(session_id) => self.leave(session_id).await,
+            RoomMsg::Leave(session_id) => {
+                self.leave(session_id).await;
+                Ok(())
+            }
             _ => todo!(),
+        };
+        if let Err(err) = self.result_tx.send(result) {
+            log::error!("Failed to send room message result: {err:?}");
         }
     }
 
@@ -385,34 +428,30 @@ impl Room {
             return Err(anyhow!("Already joined this room"));
         }
         self.users.insert(session.id, User { role, session });
-        self.broadcast_state().await;
-        Ok(())
+        self.broadcast_state().await
     }
 
-    async fn set_role(&mut self, role: UserRole, session_id: SessionId) {
+    async fn set_role(&mut self, role: UserRole, session_id: SessionId) -> anyhow::Result<()> {
         let Some(user) = self.users.get_mut(&session_id) else {
-            return;
+            return Ok(());
         };
         user.role = role;
-        self.broadcast_state().await;
+        self.broadcast_state().await
     }
 
-    async fn close(&mut self, reason: RoomCloseReason) {
+    async fn close(&mut self, reason: RoomCloseReason) -> anyhow::Result<()> {
         log::debug!("Closing room {} ('{}'): {reason:?}", self.id, self.name);
         self.running = false;
-        self.broadcast_msg(SessionMsg::RoomClosed(reason)).await;
+        self.broadcast_msg(SessionMsg::RoomClosed(reason)).await
     }
 
     async fn handle_cmd(&mut self, cmd: RoomCmd) {
         let result = match cmd {
             RoomCmd::Join(user_role, session_info) => self.join(user_role, session_info).await,
-            RoomCmd::Close(reason) => {
-                self.close(reason).await;
-                Ok(())
-            }
+            RoomCmd::Close(reason) => self.close(reason).await,
         };
-        if let Some(err) = result.err() {
-            error!("Failed to handle room command: {err:?}");
+        if let Err(err) = self.result_tx.send(result) {
+            error!("Failed to send room command result: {err:?}");
         }
     }
 
@@ -424,7 +463,7 @@ impl Room {
                         self.handle_cmd(cmd).await
                     } else {
                         error!("Room command receiver was unexpectedly closed");
-                        self.close(RoomCloseReason::ServerError).await
+                        let _ = self.close(RoomCloseReason::ServerError).await;
                     }
                 }
                 msg = self.message_rx.recv() => {
@@ -432,7 +471,7 @@ impl Room {
                         self.handle_msg(msg).await
                     } else {
                         error!("Room message receiver was unexpectedly closed");
-                        self.close(RoomCloseReason::ServerError).await
+                        let _ = self.close(RoomCloseReason::ServerError).await;
                     }
                 }
             }
@@ -463,18 +502,14 @@ impl RoomManager {
         );
         let role = UserRole::Host;
 
-        let (id, mut controller) = Room::create(name, password);
+        let mut controller = Room::create(name, password);
         controller
             .join(role, session)
             .await
             .context("Failed to create new room")?;
-        let message_tx = controller.message_sender();
-        self.room_controllers.insert(id, controller);
-        Ok(RoomHandle {
-            id,
-            role,
-            message_tx,
-        })
+        let handle = controller.handle(role);
+        self.room_controllers.insert(controller.id, controller);
+        Ok(handle)
     }
 
     pub fn get_room_password(&self, id: RoomId) -> Option<String> {
@@ -494,15 +529,11 @@ impl RoomManager {
         let Some(controller) = self.room_controllers.get_mut(&id) else {
             return Ok(None);
         };
-        let message_tx = controller
+        let handle = controller
             .join(role, session)
             .await
             .context(format!("Failed to join room {id}"))?;
-        Ok(Some(RoomHandle {
-            id,
-            role,
-            message_tx,
-        }))
+        Ok(Some(handle))
     }
 
     pub async fn close_room(&mut self, id: RoomId, reason: RoomCloseReason) -> anyhow::Result<()> {

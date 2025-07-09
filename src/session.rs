@@ -299,7 +299,7 @@ impl Session {
     }
 
     async fn send_room_msg(&mut self, msg: RoomMsg) -> anyhow::Result<()> {
-        let Some(room_handle) = &self.room else {
+        let Some(room_handle) = &mut self.room else {
             return Err(anyhow!("Not currently in a room"));
         };
         if !room_handle.send_message(msg).await? {
