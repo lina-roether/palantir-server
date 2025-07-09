@@ -4,24 +4,21 @@ use anyhow::{anyhow, Context};
 
 use crate::{
     messages::dto,
+    room::UserData,
     session::{SessionHandle, SessionId, SessionMsg},
 };
 
 #[derive(Debug, Clone)]
 pub struct PlaybackInfo {
-    pub user_id: SessionId,
-    pub user_name: String,
-    pub title: String,
-    pub href: String,
+    pub host: String,
+    pub source: Option<PlaybackSource>,
 }
 
 impl From<PlaybackInfo> for dto::RoomPlaybackInfoV1 {
     fn from(value: PlaybackInfo) -> Self {
         Self {
-            user_id: value.user_id.into(),
-            user_name: value.user_name,
-            title: value.title,
-            href: value.href,
+            host: value.host.into(),
+            source: value.source.map(Into::into),
         }
     }
 }
@@ -92,6 +89,7 @@ impl From<PlaybackState> for dto::PlaybackStateV1 {
 pub enum StopReason {
     HostError,
     StoppedByHost,
+    Superseded,
 }
 
 impl From<StopReason> for dto::PlaybackStopReasonV1 {
@@ -99,6 +97,7 @@ impl From<StopReason> for dto::PlaybackStopReasonV1 {
         match value {
             StopReason::HostError => Self::HostError,
             StopReason::StoppedByHost => Self::StoppedByHost,
+            StopReason::Superseded => Self::Superseded,
         }
     }
 }
@@ -121,16 +120,16 @@ impl From<DisconnectReason> for dto::PlaybackDisconnectReasonV1 {
 #[derive(Debug, Clone)]
 pub struct Playback {
     running: bool,
-    source: PlaybackSource,
+    source: Option<PlaybackSource>,
     host: SessionHandle,
     subscribers: HashMap<SessionId, SessionHandle>,
 }
 
 impl Playback {
-    pub fn new(host: SessionHandle, source: PlaybackSource) -> Self {
+    pub fn new(host: SessionHandle) -> Self {
         Self {
             running: false,
-            source,
+            source: None,
             host,
             subscribers: HashMap::new(),
         }
@@ -138,10 +137,8 @@ impl Playback {
 
     pub fn get_info(&self) -> PlaybackInfo {
         PlaybackInfo {
-            title: self.source.title.clone(),
-            user_id: self.host.id,
-            user_name: self.host.name.clone(),
-            href: self.source.page_href.clone(),
+            source: self.source.clone(),
+            host: self.host.name.clone(),
         }
     }
 
@@ -220,11 +217,6 @@ impl Playback {
             if !send_sync_msg(target, &normalized_state).await? {
                 errored_subscribers.push(target.id);
             }
-            target
-                .send_message(SessionMsg::PlaybackSync(
-                    normalized_state.incorporate_offset(target.time_offset()),
-                ))
-                .await?;
         }
 
         for id in errored_subscribers {

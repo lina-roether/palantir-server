@@ -91,10 +91,8 @@ pub mod dto {
 
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
     pub struct RoomPlaybackInfoV1 {
-        pub user_id: UserIdV1,
-        pub user_name: String,
-        pub title: String,
-        pub href: String,
+        pub host: String,
+        pub source: Option<PlaybackSourceV1>,
     }
 
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -177,6 +175,9 @@ pub mod dto {
 
         #[serde(rename = "stopped_by_host")]
         StoppedByHost,
+
+        #[serde(rename = "superseded")]
+        Superseded,
     }
 
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -271,6 +272,9 @@ pub enum MessageBody {
 
     #[serde(rename = "playback::available/v1")]
     PlaybackAvailableV1(dto::PlaybackAvailableMsgBodyV1),
+
+    #[serde(rename = "playback::request_host/v1")]
+    PlaybackRequestHostV1,
 
     #[serde(rename = "playback::request_start/v1")]
     PlaybackRequestStartV1(dto::PlaybackStartMsgBodyV1),

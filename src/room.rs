@@ -24,7 +24,7 @@ impl From<RoomId> for dto::RoomIdV1 {
 use crate::{
     id_type,
     messages::dto,
-    playback::{Playback, PlaybackInfo, PlaybackSource, PlaybackState},
+    playback::{Playback, PlaybackInfo, PlaybackSource, PlaybackState, StopReason},
     session::{SessionHandle, SessionId, SessionMsg},
 };
 
@@ -133,10 +133,11 @@ struct User {
 pub enum RoomMsg {
     RequestState,
     SetRole(SessionId, UserRole),
-    PlaybackStart(SessionId, PlaybackSource),
-    PlaybackStop(SessionId),
+    PlaybackHost(SessionId),
+    PlaybackStart(PlaybackSource),
     PlaybackConnect(SessionId),
     PlaybackDisconnect(SessionId),
+    PlaybackStop(SessionId),
     PlaybackSync(PlaybackState),
     Leave(SessionId),
 }
@@ -355,7 +356,18 @@ impl Room {
         new_host_id
     }
 
-    async fn start_playback(&mut self, session_id: SessionId, source: PlaybackSource) {
+    async fn host_playback(&mut self, session_id: SessionId) {
+        if let Some(mut playback) = self.playback.take() {
+            if let Err(err) = playback.stop(StopReason::Superseded).await {
+                log::error!("Failed to stop existing playback: {err}");
+            }
+        }
+
+        let Some(host) = self.users.get(&session_id) else {
+            log::error!("An unknown user tried to host a playback!");
+            return;
+        };
+
         todo!()
     }
 
@@ -364,9 +376,6 @@ impl Room {
             RoomMsg::RequestState => self.broadcast_state().await,
             RoomMsg::SetRole(session_id, role) => self.set_role(role, session_id).await,
             RoomMsg::Leave(session_id) => self.leave(session_id).await,
-            RoomMsg::PlaybackStart(session_id, source) => {
-                self.start_playback(session_id, source).await
-            }
             _ => todo!(),
         }
     }
