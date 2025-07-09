@@ -142,6 +142,7 @@ pub enum RoomRequest {
 #[derive(Debug)]
 struct RoomController {
     id: RoomId,
+    name: String,
     password: String,
     command_tx: mpsc::Sender<RoomCmd>,
     request_tx: mpsc::Sender<RoomRequest>,
@@ -153,6 +154,7 @@ impl RoomController {
     fn handle(&self, role: UserRole) -> RoomHandle {
         RoomHandle {
             id: self.id,
+            name: self.name.clone(),
             role,
             request_tx: self.request_tx.clone().downgrade(),
             result_rx: self.result_rx.clone(),
@@ -174,6 +176,7 @@ impl RoomController {
 #[derive(Debug)]
 pub struct RoomHandle {
     pub id: RoomId,
+    pub name: String,
     pub role: UserRole,
     request_tx: mpsc::WeakSender<RoomRequest>,
     result_rx: watch::Receiver<anyhow::Result<()>>,
@@ -289,13 +292,20 @@ impl Room {
         let (request_tx, request_rx) = mpsc::channel::<RoomRequest>(32);
         let (result_tx, result_rx) = watch::channel::<anyhow::Result<()>>(Ok(()));
 
-        let mut room = Room::new(name, password.clone(), command_rx, request_rx, result_tx);
+        let mut room = Room::new(
+            name.clone(),
+            password.clone(),
+            command_rx,
+            request_rx,
+            result_tx,
+        );
         let room_id = room.id;
 
         let join_handle = tokio::spawn(async move { room.run().await });
 
         let controller = RoomController {
             id: room_id,
+            name,
             password,
             command_tx,
             request_tx,
@@ -339,7 +349,9 @@ impl Room {
     }
 
     async fn leave(&mut self, session_id: SessionId) {
-        self.users.remove(&session_id);
+        let Some(user) = self.users.remove(&session_id) else {
+            return;
+        };
         if self.users.is_empty() {
             // Close the room if it has no users
             if let Err(err) = self.close(RoomCloseReason::ClosedByHost).await {
@@ -364,6 +376,7 @@ impl Room {
                 let _ = self.close(RoomCloseReason::ServerError).await;
             }
         }
+        log::info!("User '{}' left room '{}'", user.session.name, self.name);
         if let Err(err) = self.broadcast_state().await {
             log::error!("Failed to broadcast state after leaving the room: {err}");
         }
@@ -392,6 +405,12 @@ impl Room {
         };
 
         self.playback = Some(Playback::new(host.session.clone()));
+
+        log::info!(
+            "User '{}' is hosting playback in room '{}'",
+            host.session.name,
+            self.name
+        );
 
         self.send_user_msg(host.session.id, SessionMsg::PlaybackHosting)
             .await?;
@@ -448,6 +467,7 @@ impl Room {
         if self.users.contains_key(&session.id) {
             return Err(anyhow!("Already joined this room"));
         }
+        log::info!("User '{}' has joined room '{}'", session.name, self.name);
         self.users.insert(session.id, User { role, session });
         self.broadcast_state().await
     }
@@ -457,12 +477,14 @@ impl Room {
             return Ok(());
         };
         user.role = role;
+        log::info!("Setting rome of user '{}' to {role:?}", user.session.name);
         self.broadcast_state().await
     }
 
     async fn close(&mut self, reason: RoomCloseReason) -> anyhow::Result<()> {
         log::debug!("Closing room {} ('{}'): {reason:?}", self.id, self.name);
         self.running = false;
+        log::info!("Room '{}' has been closed", self.name);
         self.broadcast_msg(SessionMsg::RoomClosed(reason)).await
     }
 
@@ -477,6 +499,7 @@ impl Room {
     }
 
     async fn run(&mut self) {
+        log::info!("Room '{}' created", self.name);
         while self.running {
             tokio::select! {
                 cmd = self.command_rx.recv() => {

@@ -7,7 +7,6 @@ use std::{
 };
 
 use anyhow::{anyhow, Context};
-use log::{debug, error, warn};
 use tokio::{
     sync::{self, mpsc},
     time,
@@ -104,7 +103,8 @@ impl Session {
     }
 
     pub async fn run(&mut self) {
-        debug!("Starting session for user '{}'", self.connection.username());
+        log::debug!("Starting session for user '{}'", self.connection.username());
+        log::info!("User '{}' connected.", self.connection.username());
         while self.running {
             tokio::select! {
                 client_msg = self.connection.recv() => {
@@ -120,9 +120,9 @@ impl Session {
                         self.handle_session_msg(msg).await
                     } else {
                         self.running = false;
-                        error!("The session message channel was unexpectedly closed!");
+                        log::error!("The session message channel was unexpectedly closed!");
                         if let Err(err) = self.connection.close(CloseReason::ServerError, "Your session crashed").await {
-                            error!("Failed to close connection: {err:?}");
+                            log::error!("Failed to close connection: {err:?}");
                         }
                     }
                 },
@@ -157,6 +157,11 @@ impl Session {
             .await
             .context("Failed to leave current room before opening a new one")?;
 
+        log::info!(
+            "User '{}' is creating room '{name}'",
+            self.connection.username()
+        );
+
         let room_handle = self
             .room_manager
             .lock()
@@ -182,6 +187,12 @@ impl Session {
         if !room_handle.role.permissions().can_close {
             return Err(anyhow!("Not authorized to close the room"));
         }
+
+        log::info!(
+            "User '{}' is closing room '{}'",
+            self.connection.username(),
+            room_handle.name
+        );
 
         self.room_manager
             .lock()
@@ -343,7 +354,7 @@ impl Session {
             return Err(anyhow!("Not currently in a room"));
         };
         if !room_handle.send_request(msg).await? {
-            warn!("Room {} was unexpectedly closed", room_handle.id);
+            log::warn!("Room {} was unexpectedly closed", room_handle.id);
             self.room = None;
             self.connection
                 .send(Message::new(MessageBody::RoomDisconnectedV1(
@@ -396,7 +407,7 @@ impl Session {
             _ => Ok(()),
         };
         if let Some(err) = result.err() {
-            error!("Failed to handle message: {err:?}");
+            log::error!("Failed to handle message: {err:?}");
             self.connection.send_error(err).await;
         }
     }
@@ -464,7 +475,7 @@ impl Session {
             }
         };
         if let Some(err) = result.err() {
-            error!("Failed to handle session message: {err:?}");
+            log::error!("Failed to handle session message: {err:?}");
         }
     }
 
