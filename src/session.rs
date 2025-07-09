@@ -32,7 +32,7 @@ use crate::{
     id_type,
     messages::{dto, Message, MessageBody},
     playback::{DisconnectReason, PlaybackInfo, PlaybackState, StopReason},
-    room::{RoomCloseReason, RoomHandle, RoomId, RoomManager, RoomMsg, RoomState, UserRole},
+    room::{RoomCloseReason, RoomHandle, RoomId, RoomManager, RoomRequest, RoomState, UserRole},
 };
 
 #[derive(Debug, Clone)]
@@ -232,7 +232,7 @@ impl Session {
         }
 
         log::debug!("Session {} requested to leave its room", self.id);
-        self.send_room_msg(RoomMsg::Leave(self.id)).await?;
+        self.send_room_msg(RoomRequest::Leave(self.id)).await?;
         self.room = None;
         let result = self
             .connection
@@ -254,7 +254,7 @@ impl Session {
         }
 
         log::debug!("Session {} requested to kick {}", self.id, session_id);
-        self.send_room_msg(RoomMsg::Leave(session_id)).await?;
+        self.send_room_msg(RoomRequest::Leave(session_id)).await?;
         Ok(())
     }
 
@@ -273,7 +273,7 @@ impl Session {
             session_id,
             role
         );
-        self.send_room_msg(RoomMsg::SetRole(session_id, role))
+        self.send_room_msg(RoomRequest::SetRole(session_id, role))
             .await?;
         Ok(())
     }
@@ -298,11 +298,11 @@ impl Session {
             .await
     }
 
-    async fn send_room_msg(&mut self, msg: RoomMsg) -> anyhow::Result<()> {
+    async fn send_room_msg(&mut self, msg: RoomRequest) -> anyhow::Result<()> {
         let Some(room_handle) = &mut self.room else {
             return Err(anyhow!("Not currently in a room"));
         };
-        if !room_handle.send_message(msg).await? {
+        if !room_handle.send_request(msg).await? {
             warn!("Room {} was unexpectedly closed", room_handle.id);
             self.room = None;
             self.connection
@@ -319,7 +319,7 @@ impl Session {
     }
 
     async fn request_state(&mut self) -> anyhow::Result<()> {
-        self.send_room_msg(RoomMsg::RequestState).await
+        self.send_room_msg(RoomRequest::GetState).await
     }
 
     async fn handle_client_msg(&mut self, msg: Message) {

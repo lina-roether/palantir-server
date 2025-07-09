@@ -123,15 +123,15 @@ enum RoomCmd {
     Close(RoomCloseReason),
 }
 
-#[derive(Debug)]
-struct User {
-    role: UserRole,
-    session: SessionHandle,
+#[derive(Debug, Clone)]
+pub struct User {
+    pub role: UserRole,
+    pub session: SessionHandle,
 }
 
 #[derive(Debug, Clone)]
-pub enum RoomMsg {
-    RequestState,
+pub enum RoomRequest {
+    GetState,
     SetRole(SessionId, UserRole),
     PlaybackHost(SessionId),
     PlaybackStart(PlaybackSource),
@@ -147,7 +147,7 @@ struct RoomController {
     id: RoomId,
     password: String,
     command_tx: mpsc::Sender<RoomCmd>,
-    message_tx: mpsc::Sender<RoomMsg>,
+    request_tx: mpsc::Sender<RoomRequest>,
     result_rx: watch::Receiver<anyhow::Result<()>>,
     join_handle: JoinHandle<()>,
 }
@@ -161,7 +161,7 @@ impl RoomController {
         RoomHandle {
             id: self.id,
             role,
-            message_tx: self.message_tx.clone().downgrade(),
+            request_tx: self.request_tx.clone().downgrade(),
             result_rx: self.result_rx.clone(),
         }
     }
@@ -182,16 +182,16 @@ impl RoomController {
 pub struct RoomHandle {
     pub id: RoomId,
     pub role: UserRole,
-    message_tx: mpsc::WeakSender<RoomMsg>,
+    request_tx: mpsc::WeakSender<RoomRequest>,
     result_rx: watch::Receiver<anyhow::Result<()>>,
 }
 
 impl RoomHandle {
-    pub async fn send_message(&mut self, msg: RoomMsg) -> anyhow::Result<bool> {
-        let Some(message_tx) = self.message_tx.upgrade() else {
+    pub async fn send_request(&mut self, req: RoomRequest) -> anyhow::Result<bool> {
+        let Some(request_tx) = self.request_tx.upgrade() else {
             return Ok(false);
         };
-        message_tx.send(msg).await?;
+        request_tx.send(req).await?;
         self.result_rx.changed().await?;
         if let Err(err) = &*self.result_rx.borrow_and_update() {
             // anyhow's errors aren't clonable... not ideal, but works
@@ -248,7 +248,7 @@ struct Room {
     users: HashMap<SessionId, User>,
     playback: Option<Playback>,
     command_rx: mpsc::Receiver<RoomCmd>,
-    message_rx: mpsc::Receiver<RoomMsg>,
+    request_rx: mpsc::Receiver<RoomRequest>,
     result_tx: watch::Sender<anyhow::Result<()>>,
 }
 
@@ -257,7 +257,7 @@ impl Room {
         name: String,
         password: String,
         command_rx: mpsc::Receiver<RoomCmd>,
-        message_rx: mpsc::Receiver<RoomMsg>,
+        request_rx: mpsc::Receiver<RoomRequest>,
         result_tx: watch::Sender<anyhow::Result<()>>,
     ) -> Self {
         Self {
@@ -266,7 +266,7 @@ impl Room {
             name,
             password,
             command_rx,
-            message_rx,
+            request_rx,
             result_tx,
             playback: None,
             users: HashMap::new(),
@@ -293,16 +293,10 @@ impl Room {
 
     fn create(name: String, password: String) -> RoomController {
         let (command_tx, command_rx) = mpsc::channel::<RoomCmd>(8);
-        let (message_tx, message_rx) = mpsc::channel::<RoomMsg>(32);
-        let (message_result_tx, message_result_rx) = watch::channel::<anyhow::Result<()>>(Ok(()));
+        let (request_tx, request_rx) = mpsc::channel::<RoomRequest>(32);
+        let (result_tx, result_rx) = watch::channel::<anyhow::Result<()>>(Ok(()));
 
-        let mut room = Room::new(
-            name,
-            password.clone(),
-            command_rx,
-            message_rx,
-            message_result_tx,
-        );
+        let mut room = Room::new(name, password.clone(), command_rx, request_rx, result_tx);
         let room_id = room.id;
 
         let join_handle = tokio::spawn(async move { room.run().await });
@@ -311,8 +305,8 @@ impl Room {
             id: room_id,
             password,
             command_tx,
-            message_tx,
-            result_rx: message_result_rx,
+            request_tx,
+            result_rx,
             join_handle,
         };
 
@@ -408,18 +402,18 @@ impl Room {
         todo!()
     }
 
-    async fn handle_msg(&mut self, msg: RoomMsg) {
-        let result = match msg {
-            RoomMsg::RequestState => self.broadcast_state().await,
-            RoomMsg::SetRole(session_id, role) => self.set_role(role, session_id).await,
-            RoomMsg::Leave(session_id) => {
+    async fn handle_request(&mut self, request: RoomRequest) {
+        let result = match request {
+            RoomRequest::GetState => self.broadcast_state().await,
+            RoomRequest::SetRole(session_id, role) => self.set_role(role, session_id).await,
+            RoomRequest::Leave(session_id) => {
                 self.leave(session_id).await;
                 Ok(())
             }
             _ => todo!(),
         };
         if let Err(err) = self.result_tx.send(result) {
-            log::error!("Failed to send room message result: {err:?}");
+            log::error!("Failed to send room request result: {err:?}");
         }
     }
 
@@ -466,11 +460,11 @@ impl Room {
                         let _ = self.close(RoomCloseReason::ServerError).await;
                     }
                 }
-                msg = self.message_rx.recv() => {
-                    if let Some(msg) = msg {
-                        self.handle_msg(msg).await
+                req = self.request_rx.recv() => {
+                    if let Some(req) = req {
+                        self.handle_request(req).await
                     } else {
-                        error!("Room message receiver was unexpectedly closed");
+                        error!("Room request receiver was unexpectedly closed");
                         let _ = self.close(RoomCloseReason::ServerError).await;
                     }
                 }
