@@ -22,6 +22,7 @@ impl Default for ApiPermissions {
     }
 }
 
+#[allow(unused)]
 impl ApiPermissions {
     pub const fn none() -> Self {
         Self {

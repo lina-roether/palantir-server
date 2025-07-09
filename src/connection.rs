@@ -124,6 +124,7 @@ pub struct Connection {
 
 #[derive(Debug, Clone)]
 pub struct PingResult {
+    #[allow(unused)]
     pub latency: u64,
     pub time_offset: i64,
 }

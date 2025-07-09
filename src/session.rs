@@ -31,7 +31,7 @@ use crate::{
     connection::{CloseReason, Connection},
     id_type,
     messages::{dto, Message, MessageBody},
-    playback::{DisconnectReason, PlaybackInfo, PlaybackState, StopReason},
+    playback::{DisconnectReason, PlaybackInfo, PlaybackRequest, PlaybackState, StopReason},
     room::{RoomCloseReason, RoomHandle, RoomId, RoomManager, RoomRequest, RoomState, UserRole},
 };
 
@@ -299,6 +299,45 @@ impl Session {
             .await
     }
 
+    async fn host_playback(&mut self) -> anyhow::Result<()> {
+        let Some(room) = &self.room else {
+            return Err(anyhow!("Not currently in a room"));
+        };
+
+        if !room.role.permissions().can_host {
+            return Err(anyhow!("Not authorized to host playback"));
+        }
+
+        log::debug!("Session {} requested to host playback", self.id);
+        self.send_room_msg(RoomRequest::PlaybackHost(self.id))
+            .await?;
+
+        Ok(())
+    }
+
+    async fn connect_playback(&mut self) -> anyhow::Result<()> {
+        let Some(room) = &self.room else {
+            return Err(anyhow!("Not currently in a room"));
+        };
+
+        if !room.role.permissions().can_host {
+            return Err(anyhow!("Not authorized to host playback"));
+        }
+
+        log::debug!("Session {} requested to connect to playback", self.id);
+        self.send_room_msg(RoomRequest::PlaybackConnect(self.id))
+            .await?;
+
+        Ok(())
+    }
+
+    async fn playback_request(&mut self, request: PlaybackRequest) -> anyhow::Result<()> {
+        self.send_room_msg(RoomRequest::Playback(self.id, request))
+            .await?;
+
+        Ok(())
+    }
+
     async fn send_room_msg(&mut self, msg: RoomRequest) -> anyhow::Result<()> {
         let Some(room_handle) = &mut self.room else {
             return Err(anyhow!("Not currently in a room"));
@@ -336,6 +375,24 @@ impl Session {
                     .await
             }
             MessageBody::RoomKickUser(body) => self.kick(body.user_id.into()).await,
+            MessageBody::PlaybackRequestHostV1 => self.host_playback().await,
+            MessageBody::PlaybackRequestConnectV1 => self.connect_playback().await,
+            MessageBody::PlaybackRequestStartV1(body) => {
+                self.playback_request(PlaybackRequest::Start(body.source.into()))
+                    .await
+            }
+            MessageBody::PlaybackSyncV1(body) => {
+                self.playback_request(PlaybackRequest::Sync(body.state.into()))
+                    .await
+            }
+            MessageBody::PlaybackRequestStopV1 => {
+                self.playback_request(PlaybackRequest::Stop(StopReason::StoppedByHost))
+                    .await
+            }
+            MessageBody::PlaybackRequestDisconnectV1 => {
+                self.playback_request(PlaybackRequest::Disconnect(DisconnectReason::User))
+                    .await
+            }
             _ => Ok(()),
         };
         if let Some(err) = result.err() {

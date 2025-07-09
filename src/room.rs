@@ -24,9 +24,7 @@ impl From<RoomId> for dto::RoomIdV1 {
 use crate::{
     id_type,
     messages::dto,
-    playback::{
-        Playback, PlaybackInfo, PlaybackRequest, PlaybackSource, PlaybackState, StopReason,
-    },
+    playback::{Playback, PlaybackInfo, PlaybackRequest, StopReason},
     session::{SessionHandle, SessionId, SessionMsg},
 };
 
@@ -152,10 +150,6 @@ struct RoomController {
 }
 
 impl RoomController {
-    fn id(&self) -> RoomId {
-        self.id
-    }
-
     fn handle(&self, role: UserRole) -> RoomHandle {
         RoomHandle {
             id: self.id,
@@ -396,10 +390,6 @@ impl Room {
         let Some(host) = self.users.get(&session_id) else {
             return Err(anyhow!("Unknown user"));
         };
-
-        if !host.role.permissions().can_host {
-            return Err(anyhow!("Missing permissions to host playback"));
-        }
 
         self.playback = Some(Playback::new(host.session.clone()));
 

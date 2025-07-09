@@ -41,6 +41,17 @@ impl From<PlaybackSource> for dto::PlaybackSourceV1 {
     }
 }
 
+impl From<dto::PlaybackSourceV1> for PlaybackSource {
+    fn from(value: dto::PlaybackSourceV1) -> Self {
+        Self {
+            title: value.title,
+            page_href: value.page_href,
+            frame_href: value.frame_href,
+            element_query: value.element_query,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct PlaybackState {
     pub timestamp: u64,
