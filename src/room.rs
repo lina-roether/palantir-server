@@ -129,6 +129,16 @@ pub struct User {
     pub session: SessionHandle,
 }
 
+impl User {
+    fn get_user_data(&self) -> UserData {
+        UserData {
+            id: self.session.id,
+            name: self.session.name.clone(),
+            role: self.role,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum RoomRequest {
     GetState,
@@ -275,15 +285,7 @@ impl Room {
             name: self.name.clone(),
             password: self.password.clone(),
             playback_info: self.playback.as_ref().map(Playback::get_info),
-            users: self
-                .users
-                .iter()
-                .map(|(id, user)| UserData {
-                    id: *id,
-                    name: user.session.name.clone(),
-                    role: user.role,
-                })
-                .collect(),
+            users: self.users.values().map(User::get_user_data).collect(),
         }
     }
 
@@ -352,7 +354,9 @@ impl Room {
         let Some(user) = self.users.remove(&session_id) else {
             return;
         };
+        log::info!("User '{}' left room '{}'", user.session.name, self.name);
         if self.users.is_empty() {
+            log::info!("Room '{}' is empty and will be closed", self.name);
             // Close the room if it has no users
             if let Err(err) = self.close(RoomCloseReason::ClosedByHost).await {
                 log::error!("Error while closing empty room: {err:?}");
@@ -364,33 +368,37 @@ impl Room {
             .iter()
             .all(|(_, user)| user.role != UserRole::Host)
         {
-            let Some(new_host_id) = self.choose_new_host_id() else {
+            let Some(new_host) = self.choose_new_host() else {
                 log::error!(
                     "Failed to choose a new host id in session {session_id}! closing the room!"
                 );
                 let _ = self.close(RoomCloseReason::ServerError).await;
                 return;
             };
-            if let Err(err) = self.set_role(UserRole::Host, new_host_id).await {
+            if let Err(err) = self.set_role(UserRole::Host, new_host.id).await {
                 log::error!("Failed to set new room host: {err:?}");
                 let _ = self.close(RoomCloseReason::ServerError).await;
             }
+            log::info!(
+                "User '{}' is the new host of room '{}'",
+                new_host.name,
+                self.name
+            );
         }
-        log::info!("User '{}' left room '{}'", user.session.name, self.name);
         if let Err(err) = self.broadcast_state().await {
             log::error!("Failed to broadcast state after leaving the room: {err}");
         }
     }
 
-    fn choose_new_host_id(&mut self) -> Option<SessionId> {
-        let mut new_host_id: Option<SessionId> = None;
+    fn choose_new_host(&mut self) -> Option<UserData> {
+        let mut new_host: Option<UserData> = None;
         for (id, user) in &self.users {
             if matches!(user.role, UserRole::Host | UserRole::Guest) {
-                return Some(*id);
+                return Some(user.get_user_data());
             }
-            new_host_id.get_or_insert(*id);
+            new_host.get_or_insert(user.get_user_data());
         }
-        new_host_id
+        new_host
     }
 
     async fn host_playback(&mut self, session_id: SessionId) -> anyhow::Result<()> {
