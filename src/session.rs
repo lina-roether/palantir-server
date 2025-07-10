@@ -296,7 +296,7 @@ impl Session {
         };
 
         log::debug!(
-            "Session {} requested its permissions; the user role is {:?}",
+            "Session {} requested its permissions; the user role is {}",
             self.id,
             room.role
         );

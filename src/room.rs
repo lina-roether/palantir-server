@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt};
 
 use anyhow::{anyhow, Context};
 use log::error;
@@ -33,6 +33,16 @@ pub enum UserRole {
     Host,
     Guest,
     Spectator,
+}
+
+impl fmt::Display for UserRole {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Host => write!(f, "host"),
+            Self::Guest => write!(f, "guest"),
+            Self::Spectator => write!(f, "spectator"),
+        }
+    }
 }
 
 impl UserRole {
@@ -115,6 +125,15 @@ impl Default for UserPermissions {
 pub enum RoomCloseReason {
     ClosedByHost,
     ServerError,
+}
+
+impl fmt::Display for RoomCloseReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ClosedByHost => write!(f, "Closed by host"),
+            Self::ServerError => write!(f, "Internal server error"),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -485,12 +504,12 @@ impl Room {
             return Ok(());
         };
         user.role = role;
-        log::info!("Setting rome of user '{}' to {role:?}", user.session.name);
+        log::info!("Setting rome of user '{}' to {role}", user.session.name);
         self.broadcast_state().await
     }
 
     async fn close(&mut self, reason: RoomCloseReason) -> anyhow::Result<()> {
-        log::debug!("Closing room {} ('{}'): {reason:?}", self.id, self.name);
+        log::debug!("Closing room {} ('{}'): {reason}", self.id, self.name);
         self.running = false;
         log::info!("Room '{}' has been closed", self.name);
         self.broadcast_msg(SessionMsg::RoomClosed(reason)).await
